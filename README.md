@@ -154,11 +154,11 @@ bounds lateral reach — no `~/.ssh`, no other repositories, no `gh` login — n
 ## Developing the engine
 
 ```sh
-sh tests/test-delivery-loop.sh      # the loop, against stubbed claude/gh/make/docker
-sh tests/test-parse-ledger.sh
-sh tests/test-unit-size.sh
-sh tests/test-reclaim-worktree.sh   # from a main checkout, not a linked worktree
-sh tests/test-setup-wizard.sh
+bash tests/test-delivery-loop.sh      # the loop, against stubbed claude/gh/make/docker
+bash tests/test-parse-ledger.sh
+bash tests/test-unit-size.sh
+bash tests/test-reclaim-worktree.sh   # from a main checkout, not a linked worktree
+bash tests/test-setup-wizard.sh
 ```
 
 CI runs shellcheck and the suites.

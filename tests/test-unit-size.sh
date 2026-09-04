@@ -2,7 +2,7 @@
 #
 # Regression tests for loop/unit-size.sh and loop/comment-ratio.sh.
 #
-# Run: sh tests/test-unit-size.sh
+# Run: bash tests/test-unit-size.sh
 #
 # The fixture is a scratch repository built here rather than committed, because what is under test is
 # a DIFF: a committed fixture would measure whatever the repository's own history did to it.
