@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# The loop shells out to make twice: `clean-worktree` during reclaim, and `lint`/`test` in `prove`.
+#
+# LOOP_TEST_MAKE selects:
+#
+#   ok     (default) the gates pass
+#   fail   the gates fail every time, which must escalate
+#   flaky  the FIRST `make lint` fails and everything after passes -- a toolchain that fell over
+#          rather than a unit that is wrong. `composer install` dying mid-extraction under concurrent
+#          Docker load is the real case this models, and escalating on it costs a whole unattended
+#          night for a run that was correct.
+
+set -euo pipefail
+
+case "${1:-}" in
+  clean-worktree) exit 0 ;;
+  lint|test)
+    case "${LOOP_TEST_MAKE:-ok}" in
+      fail) exit 1 ;;
+      flaky)
+        # A file, not a variable: `make` is a fresh process every time it is called.
+        seen=0
+        [ ! -f "$LOOP_TEST_DIR/make-calls" ] || seen="$(cat "$LOOP_TEST_DIR/make-calls")"
+        echo "$((seen + 1))" > "$LOOP_TEST_DIR/make-calls"
+        [ "$seen" = 0 ] && exit 1
+        exit 0
+        ;;
+    esac
+    exit 0
+    ;;
+esac
+exit 0

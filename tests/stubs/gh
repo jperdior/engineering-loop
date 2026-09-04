@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# A `gh` that answers from a text file instead of GitHub. One row per PR:
+#
+#     branch|state|number|reviewDecision|mergedAt
+#
+# LOOP_TEST_GH=fail makes every call exit non-zero, which is how the "a transient gh failure must
+# never be read as 'no PR'" case is exercised.
+
+set -euo pipefail
+
+case "${1:-}" in
+  auth) exit 0 ;;
+esac
+
+# Only the PR reads fail, so pre-flight still passes and the failure lands where the loop has to
+# decide what a missing answer means.
+[ "${LOOP_TEST_GH:-ok}" = "fail" ] && exit 1
+
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
+  head=""
+  while [ $# -gt 0 ]; do
+    [ "$1" = "--head" ] && { head="$2"; shift; }
+    shift
+  done
+  row="$(grep "^$head|" "$LOOP_TEST_DIR/prs.txt" 2>/dev/null || true)"
+  if [ -z "$row" ]; then
+    echo "[]"
+    exit 0
+  fi
+  IFS='|' read -r _b state number review merged <<EOF
+$row
+EOF
+  if [ -n "$merged" ]; then
+    printf '[{"number":%s,"state":"MERGED","reviewDecision":"%s","mergedAt":"%s"}]\n' "$number" "$review" "$merged"
+  else
+    printf '[{"number":%s,"state":"%s","reviewDecision":"%s","mergedAt":null}]\n' "$number" "$state" "$review"
+  fi
+  exit 0
+fi
+
+exit 0
