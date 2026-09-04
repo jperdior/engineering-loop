@@ -1078,6 +1078,8 @@ record_telemetry() {
   # keeps its earlier sessions in order.
   for json in "$STATE_DIR/$BRANCH".s*.json; do
     [ -s "$json" ] || continue
+    # A session refused before it started (the usage limit) built nothing and has no row.
+    [ "$(jq -r '.is_error // false' "$json" 2>/dev/null)" != "true" ] || continue
     rows="$rows$(jq -r --arg alarm "$SESSION_CONTEXT_ALARM" '
       ([.usage.iterations[]? | (.cache_read_input_tokens//0) + (.cache_creation_input_tokens//0) + (.input_tokens//0)] | max) as $peak |
       "| " + (.loop_phase // "closing") + " | " + (.num_turns|tostring) + " | $" + ((.total_cost_usd*100|round/100)|tostring)
@@ -1245,7 +1247,9 @@ while :; do
   fi
   SESSIONS=$((SESSIONS + 1))
   STATUS_FILE="$STATE_DIR/$BRANCH.status"
-  JSON_FILE="$STATE_DIR/$BRANCH.s${RUN_ID#*-}-$(printf '%02d' "$SESSIONS").json"
+  # Epoch, then pid, then the session number: a lexical glob is chronological across runs, and two
+  # runs started within the same second cannot overwrite each other's sessions.
+  JSON_FILE="$STATE_DIR/$BRANCH.s${RUN_ID#*-}-$$-$(printf '%02d' "$SESSIONS").json"
   rm -f "$STATUS_FILE"
 
   NEXT="$(next_phase)"
