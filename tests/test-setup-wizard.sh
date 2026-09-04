@@ -65,8 +65,8 @@ stored="$(awk -F= '$1 == "GH_TOKEN" { print substr($0, length("GH_TOKEN") + 2) }
 check "a token containing = + / is stored verbatim" "$stored" "github_pat_abc==/+xyz"
 
 check "the file the wizard maintains is 0600" \
-  "$(stat -f '%Lp' "$TMP/.loop/loop.env" 2>/dev/null \
-     || stat -c '%a' "$TMP/.loop/loop.env")" "600"
+  "$(stat -c '%a' "$TMP/.loop/loop.env" 2>/dev/null \
+     || stat -f '%Lp' "$TMP/.loop/loop.env")" "600"
 
 check "the committed template carries no value" \
   "$(grep -cE '^(CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN)=.+' loop/loop.env.dist)" "0"

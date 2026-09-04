@@ -105,8 +105,8 @@ load_env_file() {
   [ -f "$f" ] || return 0
 
   # It holds tokens. Readable by anyone is worth a word, not a refusal.
-  # `stat -f` on BSD/macOS, `stat -c` on GNU; the mode is what matters, not the listing format.
-  case "$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)" in
+  # `stat -c` on GNU, `stat -f` on BSD/macOS; GNU first, because BSD's -c fails while GNU's -f answers; the mode is what matters, not the listing format.
+  case "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)" in
     ?[1-7]?|??[1-7]) printf 'delivery-loop: %s is readable beyond you; chmod 600 it\n' "$f" >&2 ;;
   esac
 
