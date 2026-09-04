@@ -40,7 +40,7 @@ set -euo pipefail
 BASE="${1:-origin/main}"
 
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd -P)"
-cd "$(git -C "$LOOP_DIR" rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)"
 
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
   echo "comment-ratio: cannot resolve base ref '$BASE' -- fetch it first (CI needs fetch-depth: 0)." >&2
