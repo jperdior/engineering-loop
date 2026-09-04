@@ -39,7 +39,6 @@ set -euo pipefail
 
 BASE="${1:-origin/main}"
 
-LOOP_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 cd "$(git rev-parse --show-toplevel)"
 
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
