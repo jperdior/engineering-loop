@@ -181,7 +181,7 @@ if [ "$(printf '%s\n' "$telem" | grep -c '^| Phase ')" = 3 ] \
    && printf '%s' "$telem" | grep -q '^| closing ' \
    && printf '%s' "$telem" | grep -q "peak context" \
    && printf '%s' "$telem" | grep -q "| PR | #"; then pass
-else fail "telemetry: $telem"; fi
+else fail "telemetry: $telem; state: $(ls "$REPO/.loop/state/" | tr "\n" " "); sizes: $(wc -c "$REPO"/.loop/state/feat-one.s*.json | tr "\n" " ")"; fi
 
 CASE="a session over the context alarm is reported, not stopped"
 fresh alarm
