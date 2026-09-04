@@ -2,7 +2,7 @@
 #
 # Regression tests for loop/reclaim-worktree.sh.
 #
-# Run: sh tests/test-reclaim-worktree.sh
+# Run: bash tests/test-reclaim-worktree.sh
 #
 # Only the refusals and the dry run are covered, and that is deliberate: the destructive path drops
 # Docker volumes and removes a directory, so a test that exercised it would need a daemon and would

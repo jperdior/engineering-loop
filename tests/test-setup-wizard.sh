@@ -2,7 +2,7 @@
 #
 # Regression tests for loop/setup-loop.sh.
 #
-# Run: sh tests/test-setup-wizard.sh
+# Run: bash tests/test-setup-wizard.sh
 #
 # The prompts themselves are not driven here. A pty harness (`script -q`) swallows the first line of
 # piped input -- verified with a bare three-`read` probe, which shifts by one slot exactly as the

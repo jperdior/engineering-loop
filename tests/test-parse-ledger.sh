@@ -2,7 +2,7 @@
 #
 # Regression tests for loop/parse-ledger.sh.
 #
-# Run: sh tests/test-parse-ledger.sh
+# Run: bash tests/test-parse-ledger.sh
 #
 # Every case here is a shape that was observed in a real spec or that broke an earlier draft of the
 # parser. The exit-3 cases are the ones that matter most: a section a caller cannot parse must stop

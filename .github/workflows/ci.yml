@@ -27,10 +27,10 @@ jobs:
           printf '#!/bin/sh\nexit 0\n' > "$HOME/bin/claude"; chmod +x "$HOME/bin/claude"
           echo "$HOME/bin" >> "$GITHUB_PATH"
       - name: The loop
-        run: sh tests/test-delivery-loop.sh
+        run: bash tests/test-delivery-loop.sh
       - name: The parsers and measurements
         run: |
-          sh tests/test-parse-ledger.sh
-          sh tests/test-unit-size.sh
-          sh tests/test-reclaim-worktree.sh
-          sh tests/test-setup-wizard.sh
+          bash tests/test-parse-ledger.sh
+          bash tests/test-unit-size.sh
+          bash tests/test-reclaim-worktree.sh
+          bash tests/test-setup-wizard.sh

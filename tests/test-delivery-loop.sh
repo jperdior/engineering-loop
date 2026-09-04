@@ -2,7 +2,7 @@
 #
 # Regression tests for loop/delivery-loop.sh.
 #
-# Run: sh tests/test-delivery-loop.sh
+# Run: bash tests/test-delivery-loop.sh
 #
 # Each case builds a throwaway repository with a real bare remote and puts stubbed `gh`, `claude`,
 # `make` and `docker` first on PATH. Nothing here talks to GitHub, Docker or Anthropic.
