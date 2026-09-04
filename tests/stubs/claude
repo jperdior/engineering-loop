@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#
+# A `claude -p` that fakes one session of a unit build. It reads the branch, the run id, the phase
+# and the sentinel path out of the prompt it is given -- exactly the things the real session is
+# told to echo back -- so the stub cannot drift from the prompt the loop actually sends.
+#
+# A prompt with a `Phase:` line is a phase session: the stub commits a line of work, ticks that
+# phase under `## Progress`, pushes and writes CONTINUE. A prompt with a sentinel template but no
+# `Phase:` line is the closing session: it ticks the ledger line the way /archive-spec does (with a
+# measured line, before the PR exists) and writes OK. A prompt with no sentinel template at all is
+# the /open-pr session.
+#
+# LOOP_TEST_CLAUDE selects the outcome:
+#
+#   ok             (default) the session does its job
+#   silent         exit 0 having written nothing                              (stopped to ask)
+#   escalate       write ESCALATE:<reason>
+#   denied         do the job, report a permission denial
+#   denied-silent  write NOTHING, report a permission denial                  (Write was denied)
+#   apierror       report is_error true alongside subtype "success"
+#   stale          write a sentinel carrying a previous run's id
+#   noticks        a phase session that pushes and hands over WITHOUT ticking its phase
+#   okphase        a phase session that writes OK, which only the closing session may
+#   continueclose  a closing session that writes CONTINUE instead of OK
+#   notebox        a closing session that leaves an unlabelled checkbox under ## Progress
+#   quota          the second session is refused for the account's usage limit
+#
+# LOOP_TEST_NOPR=1 makes the /open-pr session exit 0 having opened nothing, which real sessions do.
+#
+# Every session appends the model it was started with to $LOOP_TEST_DIR/models.txt.
+
+set -euo pipefail
+
+prompt=""
+model=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p)      prompt="$2"; shift ;;
+    --model) model="$2"; shift ;;
+  esac
+  shift
+done
+
+echo "${model:-unset}" >> "$LOOP_TEST_DIR/models.txt"
+
+sentinel_line="$(printf '%s\n' "$prompt" | grep -E '^  (OK|CONTINUE) ' | head -1 || true)"
+branch="$(printf '%s' "$sentinel_line" | awk '{ print $2 }')"
+run_id="$(printf '%s' "$sentinel_line" | awk '{ print $NF }')"
+status_file="$(printf '%s\n' "$prompt" | sed -n 's/^  \(.*\.status\)$/\1/p' | head -1)"
+
+# /open-pr is dispatched as its own short session with no sentinel template in it.
+if [ -z "$sentinel_line" ]; then
+  if [ "${LOOP_TEST_NOPR:-0}" = 1 ]; then
+    echo '{"is_error":false,"subtype":"success","permission_denials":[],"total_cost_usd":0.10}'
+    exit 0
+  fi
+  branch="$(git branch --show-current)"
+  printf '%s|OPEN|%s|NONE|\n' "$branch" "$((RANDOM % 900 + 100))" >> "$LOOP_TEST_DIR/prs.txt"
+  echo '{"is_error":false,"subtype":"success","permission_denials":[],"total_cost_usd":0.10}'
+  exit 0
+fi
+
+printf '%s\n' "$prompt" | sed -n 's/^Base:[[:space:]]*all diffs, gates and reviews for this unit are against \(.*\), never main\./\1/p' \
+  >> "$LOOP_TEST_DIR/bases.txt" 2>/dev/null || true
+
+mode="${LOOP_TEST_CLAUDE:-ok}"
+
+case "$mode" in
+  silent)
+    echo '{"is_error":false,"subtype":"success","permission_denials":[],"total_cost_usd":0.20}'
+    exit 0
+    ;;
+  escalate)
+    echo "ESCALATE:the spec contradicts itself" > "$status_file"
+    echo '{"is_error":false,"subtype":"success","permission_denials":[],"total_cost_usd":0.20}'
+    exit 0
+    ;;
+  denied-silent)
+    echo '{"is_error":false,"subtype":"success","permission_denials":[{"tool_name":"Write"},{"tool_name":"Write"}],"total_cost_usd":4.04}'
+    exit 0
+    ;;
+  apierror)
+    echo '{"is_error":true,"subtype":"success","result":"internal server error","permission_denials":[],"total_cost_usd":0.05}'
+    exit 0
+    ;;
+  quota)
+    # The SECOND session is refused, the way a limit lands mid-run: one phase is already on the
+    # branch. The count lives in a file because each session is a separate process.
+    seen=0
+    [ ! -f "$LOOP_TEST_DIR/quota-sessions" ] || seen="$(cat "$LOOP_TEST_DIR/quota-sessions")"
+    echo "$((seen + 1))" > "$LOOP_TEST_DIR/quota-sessions"
+    if [ "$seen" = 1 ]; then
+      echo '{"is_error":true,"subtype":"success","result":"You have hit your usage limit. Resets at 3pm.","permission_denials":[],"total_cost_usd":0}'
+      exit 0
+    fi
+    ;;
+esac
+
+spec="$(printf '%s\n' "$prompt" | sed -n 's/^Spec:[[:space:]]*//p' | head -1)"
+unit_label="$(printf '%s\n' "$prompt" | sed -n 's/^Unit:[[:space:]]*\([^ ]* [^ ]*\) .*/\1/p' | head -1)"
+phase="$(printf '%s\n' "$prompt" | sed -n 's/^Phase:[[:space:]]*\([^—]*[^ —]\).*/\1/p' | head -1)"
+
+# APPEND, ONE LINE PER SESSION, so a session that never ran is distinguishable from one that did:
+# on a shared branch an overwrite makes two sessions produce a byte-identical tree.
+printf 'session %s %s\n' "$branch" "${phase:-closing}" >> "sessions-$branch.txt"
+
+if [ -n "$phase" ]; then
+  # A phase session ticks its own line under ## Progress. `noticks` is the session that pushes and
+  # hands over having ticked nothing, which the loop must refuse to read as progress.
+  if [ "$mode" != noticks ] && [ -f "$spec" ]; then
+    awk -v p="$phase" '
+        $0 ~ "^- \\[ \\] \\*\\*" p "\\*\\*" { sub(/^- \[ \]/, "- [x]") }
+        { print }' "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
+  fi
+else
+  # The closing session runs /archive-spec, which ticks the ledger BEFORE the PR exists AND writes a
+  # measured line -- the loop's "is this recorded?" test reads that same line, so a stub that ticked
+  # without measuring would hide the record stage being skipped.
+  if [ -f "$spec" ] && [ -n "$unit_label" ]; then
+    awk -v u="$unit_label" '
+        $0 ~ "^- \\[ \\] \\*\\*" u "\\*\\*" {
+          sub(/^- \[ \]/, "- [x]")
+          if ($0 !~ / → /) { $0 = $0 " → 12 lines (10 impl + 2 test), 1 files, 0% comments, 0 ctx" }
+        }
+        { print }' "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
+  fi
+  # `notebox` writes the note a real session is tempted to leave: an unindented checkbox with no
+  # phase label, which breaks the checklist grammar. The loop must read that as a failure to parse,
+  # never as "nothing left unticked".
+  if [ "$mode" = notebox ] && [ -f "$spec" ]; then
+    printf '%s\n' '- [ ] remember to tell the next session about the fixture' >> "$spec"
+  fi
+  # `untick` is a closing session that leaves a phase unticked and still writes OK.
+  if [ "$mode" = untick ] && [ -f "$spec" ]; then
+    awk '/^- \[x\] \*\*Phase 3\*\*/ { sub(/^- \[x\]/, "- [ ]") } { print }' "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
+  fi
+fi
+
+git add -A
+git -c user.email=t@t.t -c user.name=t commit -q -m "session: $branch ${phase:-closing}"
+git push -q origin "$branch"
+sha="$(git rev-parse HEAD)"
+
+case "$mode" in
+  stale)         echo "OK $branch $sha an-older-run" > "$status_file" ;;
+  okphase)       echo "OK $branch $sha $run_id" > "$status_file" ;;
+  continueclose) echo "CONTINUE $branch $sha $run_id" > "$status_file" ;;
+  *)
+    if [ -n "$phase" ]; then
+      echo "CONTINUE $branch $sha $run_id" > "$status_file"
+    else
+      echo "OK $branch $sha $run_id" > "$status_file"
+    fi
+    ;;
+esac
+
+# The real result carries `usage.iterations` (per-turn input) and `modelUsage` (the context window),
+# which is what the loop reads to record a session's peak context. A stub that omitted them made the
+# telemetry silently write nothing while the suite stayed green.
+success_json='{"is_error":false,"subtype":"success","permission_denials":[],"num_turns":43,
+  "duration_ms":840000,"total_cost_usd":0.20,
+  "usage":{"input_tokens":84,"cache_creation_input_tokens":1751,"cache_read_input_tokens":95000,
+    "output_tokens":4786,
+    "iterations":[{"input_tokens":10,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000},
+                  {"input_tokens":12,"cache_creation_input_tokens":200,"cache_read_input_tokens":9000}]},
+  "modelUsage":{"claude-opus-5[1m]":{"contextWindow":1000000,"costUSD":0.20}}}'
+
+case "$mode" in
+  denied) printf '%s' "$success_json" | sed 's/"permission_denials":\[\]/"permission_denials":[{"tool_name":"Write"}]/' ;;
+  *)      printf '%s' "$success_json" ;;
+esac
+exit 0

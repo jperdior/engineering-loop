@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# A `docker` that answers the sandbox pre-flight's three questions and defers to the real one for
+# everything else. Without the deferral this stub would shadow docker for every case in the suite,
+# including the ones that legitimately ask a real daemon whether an image exists.
+#
+# LOOP_TEST_DOCKER selects:
+#
+#   unset    exec the real docker -- the suite's default, so nothing changes for existing cases
+#   ok       the image is present and the daemon is reachable
+#   nosock   the image is present and the daemon is NOT reachable: the socket is mounted but the
+#            container's uid cannot read it, which is the failure that let a whole unit be built
+#            without a single gate running
+
+set -euo pipefail
+
+if [ -z "${LOOP_TEST_DOCKER:-}" ]; then
+  selfdir="$(cd "$(dirname "$0")" && pwd)"
+  real="$(PATH="$(printf '%s' "$PATH" | sed "s|${selfdir}:||")" command -v docker || true)"
+  [ -z "$real" ] && exit 0
+  exec "$real" "$@"
+fi
+
+args="$*"
+
+case "$args" in
+  *"image inspect"*) exit 0 ;;
+esac
+
+# The socket's gid, read from inside a container because it is not the host's number.
+case "$args" in
+  *"--entrypoint stat"*) echo 999; exit 0 ;;
+esac
+
+# Can a container started as a session is started actually reach the daemon? And does the image carry
+# buildx, without which every `docker compose up --build` gate dies on a BuildKit error?
+case "$args" in
+  *"--entrypoint docker"*)
+    case "$args" in
+      *"buildx version"*)
+        [ "$LOOP_TEST_DOCKER" = "nobuildx" ] && exit 1
+        echo "github.com/docker/buildx v0.37.0"; exit 0
+        ;;
+    esac
+    [ "$LOOP_TEST_DOCKER" = "nosock" ] && exit 1
+    echo "28.0.0"; exit 0
+    ;;
+esac
+
+# Can git inside the container reach origin? The container mounts no ssh keys by design, so an ssh
+# remote has to be rewritten to https with GH_TOKEN before this can succeed.
+case "$args" in
+  *"--entrypoint git"*ls-remote*)
+    [ "$LOOP_TEST_DOCKER" = "noorigin" ] && exit 1
+    echo "deadbeef	HEAD"; exit 0
+    ;;
+esac
+
+case "$args" in
+  *"--entrypoint git"*) exit 0 ;;
+esac
+
+exit 0

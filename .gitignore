@@ -1,0 +1,5 @@
+.loop/loop.env
+.loop/state/
+.claude/worktrees/
+.claude/settings.local.json
+.DS_Store
