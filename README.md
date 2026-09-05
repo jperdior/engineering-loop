@@ -1,7 +1,7 @@
 # engineering-loop
 
-Take a feature from a sentence to a pull request, unattended, in any repository that Claude Code
-can build.
+Turns a feature request into a reviewed pull request, unattended, in any repository that Claude Code
+can build. You describe the feature and merge two things: the spec, and the PR.
 
 ```
 /ship <what you want>
@@ -12,16 +12,29 @@ can build.
                                                     ▣ you merge it
 ```
 
-Two human gates, the spec and the PR. Nothing merges itself.
+Nothing merges itself.
 
-## Why a phase per session
+## How it works
 
-A Claude session cannot observe its own context, so telling it to stop at a token budget bounds
-nothing. The loop bounds a session by scope instead: it hands each fresh `claude -p` exactly one
-phase of the spec, reads the phase's tick back from the branch on origin when the session exits,
-and refuses a handover that ticked nothing. A phase is observable; a token count is not. Context per
-session stays at what one phase needs, and the telemetry records each session's peak so a phase cut
-too large is visible.
+**The spec is the plan.** `/ship` interviews you about the feature, writes a spec under `.ai/specs/`,
+audits it with four parallel agents, and opens a PR for the spec alone. You review the plan before
+any code exists. Once it is merged, the spec's `## Progress` section is a checklist of phases, each
+small enough to build in one sitting.
+
+**The loop builds the plan, one phase at a time.** `delivery-loop.sh` creates a worktree on the
+spec's branch and starts a fresh `claude -p` session for the first unticked phase. The session builds
+that phase, runs the host's gates, commits, ticks the phase in the spec and pushes. The loop reads the
+tick back from origin and starts the next session for the next phase. A phase whose session exits
+without a tick is not retried: the loop stops and tells you why.
+
+**Every phase starts with an empty context.** A session reads only the spec, the phase it was given
+and the code that phase touches. A feature of eleven phases is eleven short sessions, not one long
+conversation that degrades as it grows. What one phase needs the next to know is written into the
+spec's notes and committed with the tick, so the handover is on the branch, not in anyone's memory.
+
+**A closing session reviews the whole branch.** When every phase is ticked, one more session runs
+`/sync-context-docs`, `/code-review` over the full diff and `/archive-spec`. The loop then runs the
+gates itself on the host, opens one PR, and stops.
 
 ## What the host provides
 
@@ -63,21 +76,24 @@ In Claude Code, in the host repository:
 /ship I want <the feature>
 ```
 
-Phase A interviews you about the product, writes `.ai/specs/<date>-<slug>.md`, audits it with four
-parallel agents, and opens the spec's PR. Merge it. Run `/ship` again (or name the spec): Phase B
-runs the loop.
+Phase A interviews you, writes `.ai/specs/<date>-<slug>.md`, audits it and opens the spec's PR.
+Merge it. Run `/ship` again, or name the spec: Phase B runs the loop.
 
 ```sh
 .loop/delivery-loop.sh .ai/specs/<file>.md --dry-run   # the plan: unit, branch, phases, models, gates
 .loop/delivery-loop.sh .ai/specs/<file>.md             # build it
 ```
 
-The loop creates `.claude/worktrees/<branch>` from `origin/main`, runs one session per unticked
-phase on `LOOP_MODEL` (default `opus`), then a closing session (`/sync-context-docs`, `/code-review`,
-`/archive-spec`), runs `LOOP_GATES` on the host, opens one PR on `sonnet`, and stops. Merge it.
+Always run the dry run first. It performs the whole pre-flight and prints what the run would do
+without creating anything.
 
-If the account's usage limit is reached mid-run the loop **pauses** (exit 5). Re-run the same command
-once it resets; it continues from the first unticked phase. There is no budget.
+The loop creates `.claude/worktrees/<branch>` from `origin/main`, runs one session per unticked
+phase on `LOOP_MODEL` (default `opus`), then the closing session, runs `LOOP_GATES` on the host,
+opens one PR on `sonnet`, and stops. Merge it.
+
+A run takes as long as the feature takes. There is no budget and no cap on the number of phases; a
+unit is built until it is done. The loop rings the terminal when it ends, and `DELIVERY_LOOP_NOTIFY`
+can run anything richer.
 
 ## The spec's two checklists
 
@@ -97,20 +113,58 @@ The loop reads two things from a spec, both written by `/spec-writing`:
 _Notes:_ what the last session learned that the spec does not say.
 ```
 
-The backticked name is the branch. Each phase is one session; the notes are the only thing that
-survives between sessions. `.loop/parse-ledger.sh <spec>` and `--phases` are the readers.
+The backticked name is the branch. Each phase is one session. The notes are how one session hands
+over to the next: a session that discovers something the spec does not say writes it there and
+commits it with the tick. `.loop/parse-ledger.sh <spec>` reads the ledger; `--phases` reads the
+checklist.
 
-## What the loop refuses, escalates and pauses
+Most features are one unit: one branch, one PR. A spec gets a second unit only for a deployment
+seam, such as a migration that must land and settle before the code that reads it.
 
-Pre-flight refuses (exit 3): a dirty or behind driver tree, a ledger with two unticked units, a spec
-with no phase checklist, missing tools, an unreachable Docker daemon under the sandbox.
+## When the loop stops
 
-Escalates (exit 4): no sentinel, `ESCALATE:<reason>` from the session, a permission denial, an API
-error, a `CONTINUE` whose phase is not ticked on origin, an `OK` with a phase still unticked, a
-`## Progress` that stops parsing, `MAX_SESSIONS` reached, a red gate on the host. The last session's
-whole result is in `.loop/state/<branch>.json`.
+Every exit code means one thing, and the log's last lines say which applies.
 
-Pauses (exit 5): the account's usage limit.
+| Exit | Meaning | What to do |
+|---|---|---|
+| 0 | the unit is done and its PR is open, or nothing was owed | review the PR |
+| 2 | wrong usage | read the usage line |
+| 3 | pre-flight refused, or another loop holds the lock | fix the tree or the tools, re-run |
+| 4 | an escalation: the unit is stopped and something is wrong | read `.loop/state/<branch>.json` |
+| 5 | paused: the account's usage limit is reached | re-run the same command once it resets |
+
+**Pre-flight refuses (3)** a dirty driver tree, a driver tree behind `origin/main`, a ledger with two
+unticked units, a spec with no phase checklist, a missing tool, and under the sandbox an unreachable
+Docker daemon. It refuses rather than guessing, because a run driven from a wrong tree builds the
+wrong thing for hours.
+
+**An escalation (4)** is a finished session whose result the loop cannot trust: no sentinel, an
+`ESCALATE:<reason>` from the session, a permission denial, an API error, a `CONTINUE` whose phase is
+not ticked on origin, an `OK` with a phase still unticked, a `## Progress` that stops parsing,
+`MAX_SESSIONS` reached, or a red gate on the host. The loop never retries an escalation. The last
+session's whole result is in `.loop/state/<branch>.json`.
+
+**A pause (5)** is not a failure. Nothing is wrong with the unit; the account is out of quota until
+it resets. Re-running the same command reads the ticks on the branch and continues from the first
+unticked phase. Phases already ticked are never rebuilt. The phase that was running when the limit
+hit is rebuilt from its start on resume, because the loop removes the worktree on every exit and only
+committed work survives.
+
+## What a run records
+
+Two things, both on the branch.
+
+The **ledger tick**: when a unit is done, `/archive-spec` ticks its line in `## Delivery` and the
+loop appends the measurement `unit-size.sh` takes of the branch: lines added, split into
+implementation and test, files touched, comment ratio, lines of prose that carry context for later
+readers, and the PR number. It sits beside the spec's estimate so the next spec's estimate can be
+better. Nothing gates on it.
+
+The **telemetry**: `.ai/telemetry/<spec>/<unit>.md` holds one row per session: the phase it built,
+turns, notional API cost, peak context, wall clock and model. Peak context is the size of the largest
+request the session made. A phase whose session peaks above `SESSION_CONTEXT_ALARM` is flagged in the
+log and the telemetry as cut too large; that is a reading to act on in the next spec's phasing, not
+a limit the loop enforces.
 
 ## Settings
 
@@ -125,17 +179,27 @@ All in `.loop/loop.env`; the shell overrides the file.
 | `LOOP_MODEL` | `opus` | the model of every build session; the PR session runs on `sonnet` |
 | `MAX_SESSIONS` | phases + 2 | sessions per invocation before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
-| `SESSION_CONTEXT_ALARM` | `150000` | a session whose recorded peak context exceeds this is reported |
+| `SESSION_CONTEXT_ALARM` | `150000` | peak context above which a phase is flagged as cut too large; reporting only |
 | `LOOP_SANDBOX` | `0` | `1` runs each session in a container with no host credentials |
 | `DELIVERY_LOOP_NOTIFY` | unset | a command that receives the headline when the loop needs you |
+| `DELIVERY_LOOP_BELL` | `1` | `0` silences the terminal bell on completion and escalation |
 
 ## The sandbox
 
-`LOOP_SANDBOX=1` runs each session inside `.loop/sandbox/Dockerfile` (`.loop/sandbox/build.sh` builds
-it) with the worktree and the main `.git` mounted, the host Docker socket for the gates, and two
-credentials from `.loop/loop.env`: `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`) and a `GH_TOKEN`
-that should be a fine-grained PAT scoped to the repository. `.loop/setup-loop.sh` asks for both. It
-bounds lateral reach — no `~/.ssh`, no other repositories, no `gh` login — not a determined escape.
+The loop runs `claude -p` with permission prompts bypassed, because an unattended session has nobody
+to answer them. A deny list blocks the dangerous verbs by every route to them, but a deny list cannot
+enumerate everything, and on the host the session holds your ssh keys and your `gh` login.
+
+`LOOP_SANDBOX=1` runs each session inside `.loop/sandbox/Dockerfile` (`.loop/sandbox/build.sh`
+builds it) with the worktree and the main `.git` mounted, the host Docker socket for the gates, and
+two credentials from `.loop/loop.env`: `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`) and a
+`GH_TOKEN` that should be a fine-grained PAT scoped to the repository, with `contents:write` and
+`pull_requests:write`. `.loop/setup-loop.sh` asks for both without echoing them.
+
+What it bounds is lateral reach: no `~/.ssh`, no other repositories, no `gh` login, and a token that
+cannot merge. What it does not bound is the Docker socket, which the gates need and which a
+determined session could escape through. It stops accidents, which is the threat an unattended loop
+actually presents. Use it for any run nobody is watching.
 
 ## Skills
 
@@ -161,4 +225,5 @@ bash tests/test-reclaim-worktree.sh   # from a main checkout, not a linked workt
 bash tests/test-setup-wizard.sh
 ```
 
-CI runs shellcheck and the suites.
+`test-delivery-loop.sh` checks that no loop snapshot is left in `$TMPDIR`, so it cannot run on a
+host where a real loop is in flight. CI runs shellcheck and the suites.
