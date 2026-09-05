@@ -85,12 +85,14 @@ case "$mode" in
     ;;
   quota)
     # The SECOND session is refused, the way a limit lands mid-run: one phase is already on the
-    # branch. The count lives in a file because each session is a separate process.
+    # branch. The count lives in a file because each session is a separate process. The payload is
+    # the one the CLI actually emits: the 429 sits in api_error_status and the text says "session
+    # limit" -- a classifier that only greps the text for "usage limit" escalates on it.
     seen=0
     [ ! -f "$LOOP_TEST_DIR/quota-sessions" ] || seen="$(cat "$LOOP_TEST_DIR/quota-sessions")"
     echo "$((seen + 1))" > "$LOOP_TEST_DIR/quota-sessions"
     if [ "$seen" = 1 ]; then
-      echo '{"is_error":true,"subtype":"success","result":"You have hit your usage limit. Resets at 3pm.","permission_denials":[],"total_cost_usd":0}'
+      echo '{"is_error":true,"subtype":"success","api_error_status":429,"result":"You'"'"'ve hit your session limit · resets 3:20am (UTC)","permission_denials":[],"total_cost_usd":0}'
       exit 0
     fi
     ;;
