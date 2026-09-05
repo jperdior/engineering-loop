@@ -2,7 +2,11 @@
 #
 # A `gh` that answers from a text file instead of GitHub. One row per PR:
 #
-#     branch|state|number|reviewDecision|mergedAt
+#     branch|state|number|reviewDecision|mergedAt|headSha
+#
+# headSha is optional and answers `--json headRefOid`. It is what separates a merged PR that is
+# THIS branch from one whose name the branch merely reuses, so a row that omits it leaves the
+# loop no positive answer and the merged state stands.
 #
 # LOOP_TEST_GH=fail makes every call exit non-zero, which is how the "a transient gh failure must
 # never be read as 'no PR'" case is exercised.
@@ -28,13 +32,20 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
     echo "[]"
     exit 0
   fi
-  IFS='|' read -r _b state number review merged <<EOF
+  IFS='|' read -r _b state number review merged head_sha <<EOF
 $row
 EOF
-  if [ -n "$merged" ]; then
-    printf '[{"number":%s,"state":"MERGED","reviewDecision":"%s","mergedAt":"%s"}]\n' "$number" "$review" "$merged"
+  if [ -n "$head_sha" ]; then
+    sha_field="$(printf '"%s"' "$head_sha")"
   else
-    printf '[{"number":%s,"state":"%s","reviewDecision":"%s","mergedAt":null}]\n' "$number" "$state" "$review"
+    sha_field=null
+  fi
+  if [ -n "$merged" ]; then
+    printf '[{"number":%s,"state":"MERGED","reviewDecision":"%s","mergedAt":"%s","headRefOid":%s}]\n' \
+      "$number" "$review" "$merged" "$sha_field"
+  else
+    printf '[{"number":%s,"state":"%s","reviewDecision":"%s","mergedAt":null,"headRefOid":%s}]\n' \
+      "$number" "$state" "$review" "$sha_field"
   fi
   exit 0
 fi
