@@ -653,20 +653,26 @@ final_prompt() {
 Every phase of an approved spec is built and ticked on this branch. You close the unit out,
 unattended: review it, tick its ledger, and stop before the PR.
 
+This is a headless session. The moment you end your turn the process exits, this worktree is
+removed, and anything not pushed is gone. So nothing runs in the background -- run gates and
+reviewers in the foreground and wait for them -- and every step below ends with a commit and a
+push before the next one starts.
+
 Spec:   $spec
 Unit:   $unit - branch $branch
 Base:   all diffs, gates and reviews for this unit are against $UNIT_BASE, never main.
 
 In this order:
-  1. /sync-context-docs against $UNIT_BASE; commit anything it changes.
+  1. /sync-context-docs against $UNIT_BASE; commit and push anything it changes.
   2. /code-review over  git diff \$(git merge-base "$UNIT_BASE" HEAD)...HEAD  -- the reviewers run on
-     opus. Resolve every Critical and High finding: one fix wave, one scoped re-review, commit.
+     opus. Resolve every Critical and High finding in one fix wave; commit and push it. Then
+     /run-gates $UNIT_BASE in the foreground until every in-scope gate is green, and one scoped
+     re-review; commit and push.
      A finding you cannot resolve without a human is an ESCALATE, not a note in the PR.
-  3. /archive-spec $spec -- it ticks this unit's ledger line and archives the spec.
-  4. push.
-  5. Do NOT open a pull request: the run opens it once it has re-run the gates itself.
+  3. /archive-spec $spec -- it ticks this unit's ledger line and archives the spec. Commit and push.
+  4. Do NOT open a pull request: the run opens it once it has re-run the gates itself.
 
-Before exiting, write exactly one line to this file
+The last thing you do, after the final push, is write exactly one line to this file
   $status_file
 That line is one of:
   OK $branch <the sha you pushed> $RUN_ID
