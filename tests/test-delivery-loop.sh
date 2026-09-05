@@ -384,11 +384,37 @@ fresh mergedopen
 run_loop
 git -C "$REPO" push -q -f origin "feat-one~1:refs/heads/feat-one"
 git -C "$REPO" branch -f feat-one feat-one~1
-printf 'feat-one|MERGED|7|APPROVED|2026-09-01T00:00:00Z\n' > "$LOOP_TEST_DIR/prs.txt"
+# The head this PR merged is what the branch now points at, which is what makes it THIS unit's PR
+# rather than a name it reuses. Without the sha the row proves nothing either way.
+merged_sha="$(git -C "$REPO" rev-parse feat-one)"
+printf 'feat-one|MERGED|7|APPROVED|2026-09-01T00:00:00Z|%s\n' "$merged_sha" > "$LOOP_TEST_DIR/prs.txt"
 set +e
 run_loop; rc=$?
 set -e
 if [ "$rc" = 4 ] && grep -q "merged but the ledger is unticked" "$TMP/err"; then pass; else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+# A NAME OUTLIVES THE UNIT THAT USED IT. A spec delivered over several passes reuses branch names,
+# and `gh pr list --state all` keeps answering with the PR that already merged under one. The
+# branch existing on origin does not separate the two cases once a run has pushed its first phase,
+# which it does within the hour -- so the retired PR reads as this run's, and hours of built work
+# escalate instead of continuing.
+CASE="a merged PR whose head is not on the branch is a reused name, not this unit"
+fresh stalename
+git -C "$REPO" checkout -q -b stale-head main
+git -C "$REPO" commit -q --allow-empty -m "the head a retired unit merged"
+stale_sha="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" checkout -q -b feat-one main
+git -C "$REPO" commit -q --allow-empty -m "a phase this run already pushed"
+git -C "$REPO" push -q -u origin feat-one
+git -C "$REPO" checkout -q main
+printf 'feat-one|MERGED|7|APPROVED|2026-09-01T00:00:00Z|%s\n' "$stale_sha" > "$LOOP_TEST_DIR/prs.txt"
+set +e
+run_loop; rc=$?
+set -e
+if grep -q "merged but the ledger is unticked" "$TMP/err"; then
+  fail "escalated on a retired PR's name (exit $rc)"
+elif [ "$(phase_ticks feat-one)" -gt 0 ]; then pass
+else fail "exit $rc, no phase built: $(tail -2 "$TMP/err")"; fi
 
 # THE ONE FAILURE THIS DESIGN EXISTS TO PREVENT: reporting success for work that was not done. A
 # session can exit 0 having opened nothing; the loop asks origin.
