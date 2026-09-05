@@ -5,36 +5,23 @@
 #   parse-ledger.sh <spec>            the `## Delivery` ledger:  done|unit|branch
 #   parse-ledger.sh <spec> --phases   the `## Progress` checklist: done|phase|title
 #
-# Called by: /implement-spec and /archive-spec (which unit is this branch, is anything still owed),
-# and the delivery loop (which unit to build, which phase to hand the next session). One grammar,
-# one implementation, so the three cannot drift.
+# Called by /implement-spec, /archive-spec and the delivery loop. One grammar, one implementation.
 #
-# `done` is `x` or a space. A ledger row's `unit` is the PR label (`PR 1`) and `branch` the unit's
-# branch -- the first backticked name after the label. A phase row's `phase` is the label
-# (`Phase 2`) and `title` the text after it, with the leading dash stripped.
+# `done` is `x` or a space. A ledger row's `unit` is the label (`PR 1`) and `branch` the first
+# backticked name after it. A phase row's `phase` is the label (`Phase 2`) and `title` the text after
+# it, with the leading dash stripped.
 #
-# The grammar is fussy for reasons that are all real specs seen in this repo:
+# The grammar is strict on purpose, because an unattended caller cannot ask what a line meant:
 #
-#   - The section is bounded on `#{1,4}` AFTER tolerating leading whitespace: a live spec has a
-#     ` ## New business rules` heading with a leading space, which a `/^## /` bound never resets on,
-#     so the section ran to the end of the file.
-#   - Fenced blocks are skipped. Specs demonstrate this very grammar inside markdown fences, and an
-#     example parsed as a real entry becomes a phantom branch somebody tries to build. A fence
-#     delimiter is backticks plus an optional language tag and NOTHING else: a prose line containing
-#     an inline code span has a second run of backticks on it, and treating that as a delimiter flips
-#     the fence state for the rest of the file.
-#   - An entry must carry its bold label (`**PR `, `**Phase `), so a checkbox inside a `### PR N`
-#     prose subsection is not an entry, and a free-form `- [ ] remember to …` note is not a phase.
-#
-# Every UNINDENTED checkbox inside the section is counted against the rows emitted. A one-character
-# typo -- `* [ ]` for `- [ ]`, a missing label -- would otherwise drop an entry silently, and an
-# unattended caller would simply never build it. Indented checkboxes are exempt: a nested sub-item
-# under an entry is ordinary markdown.
-#
-# A section that yields NO entries at all is the same failure one step further on: exit 0 with no
-# output would leave the delivery loop iterating an empty list and reporting success having built
-# nothing -- silence read as "there was nothing to do". So zero entries in a section that exists is
-# exit 3, like any other malformed section.
+#   - A section ends at the next `#{1,4}` heading, tolerating leading whitespace.
+#   - Fenced code blocks are skipped, so a spec can document this grammar without creating a phantom
+#     unit. A fence delimiter is backticks plus an optional language tag and nothing else.
+#   - An entry must carry its bold label (`**PR `, `**Phase `). A checkbox without one is not an entry.
+#   - Every unindented checkbox in the section is counted against the rows emitted, so a typo
+#     (`* [ ]`, a missing label) fails loudly instead of dropping an entry. Indented checkboxes are
+#     ordinary nested markdown and exempt.
+#   - A section with no entries is exit 3, like any malformed section: exit 0 with no output would
+#     leave the loop building nothing and reporting success.
 #
 # Exit: 0 parsed, 2 usage, 3 the section is malformed or absent.
 

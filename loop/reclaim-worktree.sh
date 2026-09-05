@@ -59,8 +59,8 @@ if [ "$git_dir" = "$common_dir" ]; then
   exit 3
 fi
 
-# Reclaiming a worktree of some OTHER repository would run its Makefile and remove it from its own
-# repository, which is never what a caller in this tree means.
+# Reclaiming a worktree of some other repository would run the cleanup command there and remove it
+# from its own repository, which is never what a caller in this tree means.
 self_common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 if [ "$common_dir" != "$self_common_dir" ]; then
   echo "reclaim-worktree: $WT belongs to a different repository ($common_dir) -- refusing." >&2

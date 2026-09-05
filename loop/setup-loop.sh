@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 #
-# Walk a human through the two credentials the delivery loop needs, and write them where it looks.
+# Walk a human through the two credentials the sandboxed loop needs, and write them to .loop/loop.env.
 #
-# It exists because this is the one part of the harness a script cannot do for you: both tokens are
-# minted through a browser, and the choice between a scoped PAT and a full-access one is a judgement
-# about blast radius rather than a default. What a script CAN do is explain each one at the moment it
-# is asked for, put the values in the right file with the right mode, and never echo them back.
+# Both tokens are minted through a browser, so a script cannot fetch them. What it can do is explain
+# each one when it is asked for, write the values with the right file mode, and never echo them back.
 #
 # Idempotent. Run it again to change one value and keep the rest.
 #
@@ -86,7 +84,7 @@ ask_secret() {
 cat <<'INTRO'
 
 Engineering-loop setup
-===================
+======================
 
 The loop builds a spec's units unattended, one PR at a time. When it runs inside
 a container (LOOP_SANDBOX=1) that container inherits none of your logins, so it

@@ -7,9 +7,8 @@
 #   ok     (default) the gates pass
 #   fail   the gates fail every time, which must escalate
 #   flaky  the FIRST `make lint` fails and everything after passes -- a toolchain that fell over
-#          rather than a unit that is wrong. `composer install` dying mid-extraction under concurrent
-#          Docker load is the real case this models, and escalating on it costs a whole unattended
-#          night for a run that was correct.
+#          (a package install dying under load) rather than a unit that is wrong. Escalating on it
+#          would cost a whole unattended night for a run that was correct.
 
 set -euo pipefail
 

@@ -71,7 +71,8 @@ common case, not the exception.
 4. **Audit.** `/pre-implement-spec .ai/specs/{file}.md`. Four parallel agents.
 5. **Revise until the verdict is "ready".** Fix what it found; re-run it if the
    findings were structural. Do not carry Critical or High findings into a PR.
-6. **Open the spec PR.** `/open-pr`, labels `documentation` + `skip-qa`.
+6. **Open the spec PR.** `/open-pr`. It applies only labels the repository already defines;
+   a documentation label fits if there is one.
 7. **STOP.** Report the ledger, the phase list and the audit verdict. Say plainly
    that nothing is built yet and that merging is the gate.
 

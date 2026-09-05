@@ -75,4 +75,4 @@ if [ "$failures" -ne 0 ]; then
   printf '\nFAIL: %d test(s) failed.\n' "$failures" >&2
   exit 1
 fi
-printf '\nOK -- setup-delivery-loop.sh\n'
+printf '\nOK -- setup-loop.sh\n'

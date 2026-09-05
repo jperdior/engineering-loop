@@ -1,30 +1,22 @@
 #!/usr/bin/env bash
 #
-# Measure a delivery unit. REPORTS, never gates.
+# Measure a delivery unit. Reports, never gates.
 #
-# Prints exactly the tick's measurement fields, in the order the ledger records them:
+# Prints the tick's measurement fields in the order the ledger records them:
 #
-#     L lines, F files, C% comments, K ctx
+#     L lines (I impl + T test), F files, C% comments, K ctx
 #
-# No line count bounds anything: line count is not what makes a unit expensive. What drives a
-# session's cost is how much of the tree it must READ, not how much it writes, and the delivery loop
-# bounds that by handing each session one phase. The numbers here are data the ledger and
-# the telemetry record because a reader wants them, not a verdict.
-#
-# The four numbers:
-#
-#   L  reviewable lines -- insertions + deletions, minus generated and translated files nobody reads.
+#   L  reviewable lines: insertions + deletions, minus generated files nobody reads.
 #   F  files, after the same exclusions.
 #   C  the comment ratio, from comment-ratio.sh.
-#   K  context-bearing lines -- additions to `.ai/**` and any `AGENTS.md`. Every reviewer subagent
-#      loads those unconditionally, so they cost context on every unit forever rather than once. The
-#      exclusions deliberately do NOT remove them: a spec is not reviewed line by line, but it is
-#      read. K is what makes visible the trade where moving reasoning out of code and into the
-#      rulebooks stops paying.
+#   K  context-bearing lines: additions to `.ai/**` and any `AGENTS.md`. Every agent loads those on
+#      every run, so they cost context forever rather than once. They are not excluded from L.
 #
-# The exclusions are `:(top,exclude)` magic pathspecs. A plain `:(exclude)` is cwd-relative and stops
-# matching -- silently, reporting a larger diff -- the moment the script is called from a
-# subdirectory. `:(top)` leads the include list for the same reason.
+# No number here bounds anything. What drives a session's cost is how much of the tree it must read,
+# and the delivery loop bounds that by handing each session one phase.
+#
+# The exclusions are `:(top,exclude)` pathspecs: a plain `:(exclude)` is cwd-relative and silently
+# stops matching when the script is called from a subdirectory.
 #
 # Usage: unit-size.sh [base]   -- base defaults to origin/main.
 #

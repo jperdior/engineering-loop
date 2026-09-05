@@ -31,8 +31,8 @@ Invoke before starting this workflow:
 - `superpowers:verification-before-completion` — after updating each doc, re-read the changed
   sections against the code and confirm every statement is accurate before committing.
 
-**Run this before `/open-pr` or `/check-and-commit`.** Every doc change on the branch must be
-committed before the PR opens.
+**Run this before `/open-pr`.** Every doc change on the branch must be committed before the PR
+opens.
 
 ---
 

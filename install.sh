@@ -46,10 +46,8 @@ echo "install: engineering loop -> $HOST/.loop"
 
 mkdir -p "$HOST/.loop/skills" "$HOST/.claude/skills" "$HOST/.ai/specs"
 
-# The engine is replaced whole; the host's own settings and state are not touched.
-for f in delivery-loop.sh parse-ledger.sh unit-size.sh comment-ratio.sh reclaim-worktree.sh setup-loop.sh loop.env.dist; do
-  cp "$SRC/loop/$f" "$HOST/.loop/$f"
-done
+# The engine is replaced whole; the host's own loop.env and state/ are not touched.
+cp "$SRC"/loop/*.sh "$SRC/loop/loop.env.dist" "$HOST/.loop/"
 mkdir -p "$HOST/.loop/sandbox"
 cp "$SRC/loop/sandbox/Dockerfile" "$SRC/loop/sandbox/build.sh" "$HOST/.loop/sandbox/"
 chmod +x "$HOST/.loop/"*.sh "$HOST/.loop/sandbox/build.sh"
@@ -72,16 +70,33 @@ for line in ".loop/loop.env" ".loop/state/" ".claude/worktrees/" ".claude/settin
   grep -qxF "$line" "$HOST/.gitignore" || echo "$line" >> "$HOST/.gitignore"
 done
 
+# The skills depend on the superpowers plugin (brainstorming, test-driven-development,
+# subagent-driven-development, dispatching-parallel-agents). Install it at user scope when the
+# claude CLI is here and it is not already present; a failure is reported, not fatal.
+superpowers_note="already installed"
+if ! command -v claude >/dev/null 2>&1; then
+  superpowers_note="the claude CLI is not on PATH; install it yourself: /plugin install superpowers@superpowers-marketplace"
+elif ! claude plugin list 2>/dev/null | grep -q 'superpowers@'; then
+  if claude plugin marketplace add obra/superpowers-marketplace >/dev/null 2>&1 \
+     && claude plugin install -y superpowers@superpowers-marketplace >/dev/null 2>&1; then
+    superpowers_note="installed at user scope"
+  else
+    superpowers_note="could not be installed automatically; in Claude Code run:
+       /plugin marketplace add obra/superpowers-marketplace
+       /plugin install superpowers@superpowers-marketplace"
+  fi
+fi
+
 cat <<NEXT
 
-Installed. Next:
+Installed. superpowers plugin: $superpowers_note
+
+Next:
 
   1. Set the host contract in .loop/loop.env (start from .loop/loop.env.dist):
        LOOP_GATES=<the commands that must be green, separated by ;>    e.g. make lint;make test
   2. Optional, for unattended runs in a container:  .loop/setup-loop.sh  then  .loop/sandbox/build.sh
-  3. Install the superpowers plugin in Claude Code (the skills use its brainstorming, TDD and
-     subagent-driven-development skills).
-  4. In Claude Code:  /ship <what you want>
+  3. In Claude Code:  /ship <what you want>
 
 Commit .loop/, .claude/skills/ and .gitignore.
 NEXT

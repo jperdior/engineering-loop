@@ -125,6 +125,9 @@ bind you directly:
   against the spec and the tree. A contradiction is an escalation, never something to improvise
   past — the spec is a human's gate, and amending it to match what you would rather build
   removes the gate.
+- **Test first, always.** Invoke `superpowers:test-driven-development` and follow it: write the
+  failing test the phase's section names, watch it fail, write the minimum code that passes,
+  refactor with the test green. No production code lands before a failing test that wants it.
 - **Follow the host's conventions.** The root `AGENTS.md` / `CLAUDE.md` and the nearest one to
   the code being touched are binding: layout, naming, layering, dependency rules, whatever they
   declare. Where they are silent, follow the shape of the surrounding code.
@@ -184,8 +187,7 @@ Interactively, once every phase is ticked; under the loop, this is the closing s
    commit doc changes.
 2. **Code review gate (once, over the whole branch)** — the *only* code review in the flow.
    Package the diff with `git diff $(git merge-base "$BASE" HEAD)...HEAD` (never `HEAD~1`),
-   where `$BASE` is `origin/main` or the `Base:` the loop's prompt names. `scripts/review-package`
-   is a `superpowers` plugin script and does not exist in this repository. Then dispatch
+   where `$BASE` is `origin/main` or the `Base:` the loop's prompt names. Then dispatch
    `/code-review` (reviewers on opus) over that diff, pointed at any parked lines. Resolve every
    Critical and High finding — one fix wave max, one scoped re-review, then adjudicate
    residuals. Commit the fixes.
@@ -207,8 +209,8 @@ Interactively, once every phase is ticked; under the loop, this is the closing s
 
 ## When things go wrong
 
-- A gate fails on the current phase → routes into the fix loop; use `/root-cause` + `/fix` if
-  the root cause spans multiple files.
+- A gate fails on the current phase → routes into the fix loop. When the root cause spans several
+  files, invoke `superpowers:systematic-debugging` before touching code.
 - The spec proves wrong mid-implementation → stop, update the spec, re-run
   `/pre-implement-spec`, then resume at the current phase. Under the loop, `ESCALATE` instead:
   the spec is a human's gate.
