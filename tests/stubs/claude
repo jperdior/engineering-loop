@@ -24,6 +24,7 @@
 #   continueclose  a closing session that writes CONTINUE instead of OK
 #   notebox        a closing session that leaves an unlabelled checkbox under ## Progress
 #   quota          the second session is refused for the account's usage limit
+#   archived       the closing session moves the ticked spec to .ai/specs/implemented/
 #
 # LOOP_TEST_NOPR=1 makes the /open-pr session exit 0 having opened nothing, which real sessions do.
 #
@@ -131,6 +132,12 @@ else
   # never as "nothing left unticked".
   if [ "$mode" = notebox ] && [ -f "$spec" ]; then
     printf '%s\n' '- [ ] remember to tell the next session about the fixture' >> "$spec"
+  fi
+  # `archived` is what /archive-spec really does on the last unit: the ticked spec is MOVED to
+  # .ai/specs/implemented/, so nothing is left at the path the loop was given.
+  if [ "$mode" = archived ] && [ -f "$spec" ]; then
+    mkdir -p "$(dirname "$spec")/implemented"
+    git mv "$spec" "$(dirname "$spec")/implemented/$(basename "$spec")"
   fi
   # `untick` is a closing session that leaves a phase unticked and still writes OK.
   if [ "$mode" = untick ] && [ -f "$spec" ]; then

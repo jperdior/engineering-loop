@@ -320,6 +320,28 @@ set -e
 if [ "$rc" = 4 ] && grep -q "still unticked" "$TMP/err"; then pass
 else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
 
+# /archive-spec moves the spec to .ai/specs/implemented/ when it ticks the last unit. A loop that then
+# looks for it at the old path finds the driver checkout's copy, with nothing ticked, and escalates
+# "OK with N phases still unticked" against a unit that is finished. Hit live closing PR 5 of a spec.
+CASE="a closing session that archives the spec is read from implemented/, and the unit is recorded there"
+fresh archived
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=archived; run_loop ); rc=$?
+set -e
+archived_ledger="$(git -C "$REPO" show feat-one:.ai/specs/implemented/fixture.md 2>/dev/null | grep '^- \[x\] \*\*PR 1\*\*' || true)"
+if [ "$rc" = 0 ] && ! grep -q "ESCALATE" "$TMP/err" \
+   && [ -n "$archived_ledger" ] && printf '%s' "$archived_ledger" | grep -q ' → .* (#'; then pass
+else fail "exit $rc, ledger: ${archived_ledger:-<none at implemented/>}: $(tail -2 "$TMP/err")"; fi
+
+# The same state a crash between the closing session's push and the record stage leaves behind: the
+# ledger is ticked on the branch, the PR may or may not exist, the measurement is not recorded. The
+# next run must not review the unit again; it proves, opens or finds the PR, and records.
+CASE="a unit whose ledger is ticked on the branch is not closed again"
+before="$(sessions feat-one)"
+if run_loop && [ "$(sessions feat-one)" = "$before" ] && grep -q "the unit is closed" "$TMP/out"; then pass
+else fail "sessions $before -> $(sessions feat-one): $(tail -2 "$TMP/err")"; fi
+
 CASE="CONTINUE from the closing session escalates"
 fresh contclose
 # Three good phase sessions, then a closing session that hands over instead of finishing.
