@@ -209,11 +209,19 @@ escalate() {
 # unit's branch and reach `main` only when the PR merges, so while a unit is being built the
 # checkout's copy of the spec shows no progress at all. When the branch exists on origin, its copy
 # is the one read; before that, the checkout's.
+#
+# /archive-spec MOVES the spec to .ai/specs/implemented/ when it ticks the last unit, so on a finished
+# branch the spec is no longer at the path this run was given. Every read of the branch's copy tries
+# the archived path second; the driver checkout's copy, which shows no progress, comes last.
+archived_spec() {
+  printf '%s/implemented/%s' "$(dirname "$SPEC")" "$(basename "$SPEC")"
+}
+
 spec_on_branch() {
   local out="$1"
-  if [ -n "$BRANCH" ] && git rev-parse --verify --quiet "origin/$BRANCH" >/dev/null \
-     && git show "origin/$BRANCH:$SPEC" > "$out" 2>/dev/null; then
-    return 0
+  if [ -n "$BRANCH" ] && git rev-parse --verify --quiet "origin/$BRANCH" >/dev/null; then
+    git show "origin/$BRANCH:$SPEC" > "$out" 2>/dev/null && return 0
+    git show "origin/$BRANCH:$(archived_spec)" > "$out" 2>/dev/null && return 0
   fi
   cp "$SPEC" "$out"
 }
@@ -653,20 +661,26 @@ final_prompt() {
 Every phase of an approved spec is built and ticked on this branch. You close the unit out,
 unattended: review it, tick its ledger, and stop before the PR.
 
+This is a headless session. The moment you end your turn the process exits, this worktree is
+removed, and anything not pushed is gone. So nothing runs in the background -- run gates and
+reviewers in the foreground and wait for them -- and every step below ends with a commit and a
+push before the next one starts.
+
 Spec:   $spec
 Unit:   $unit - branch $branch
 Base:   all diffs, gates and reviews for this unit are against $UNIT_BASE, never main.
 
 In this order:
-  1. /sync-context-docs against $UNIT_BASE; commit anything it changes.
+  1. /sync-context-docs against $UNIT_BASE; commit and push anything it changes.
   2. /code-review over  git diff \$(git merge-base "$UNIT_BASE" HEAD)...HEAD  -- the reviewers run on
-     opus. Resolve every Critical and High finding: one fix wave, one scoped re-review, commit.
+     opus. Resolve every Critical and High finding in one fix wave; commit and push it. Then
+     /run-gates $UNIT_BASE in the foreground until every in-scope gate is green, and one scoped
+     re-review; commit and push.
      A finding you cannot resolve without a human is an ESCALATE, not a note in the PR.
-  3. /archive-spec $spec -- it ticks this unit's ledger line and archives the spec.
-  4. push.
-  5. Do NOT open a pull request: the run opens it once it has re-run the gates itself.
+  3. /archive-spec $spec -- it ticks this unit's ledger line and archives the spec. Commit and push.
+  4. Do NOT open a pull request: the run opens it once it has re-run the gates itself.
 
-Before exiting, write exactly one line to this file
+The last thing you do, after the final push, is write exactly one line to this file
   $status_file
 That line is one of:
   OK $branch <the sha you pushed> $RUN_ID
@@ -1063,9 +1077,11 @@ EOF
 ledger_of_branch() {
   local tmp
   tmp="$(mktemp)"
-  if ! git show "$BRANCH:$SPEC" > "$tmp" 2>/dev/null && ! git show "origin/$BRANCH:$SPEC" > "$tmp" 2>/dev/null; then
-    cp "$SPEC" "$tmp"
-  fi
+  git show "$BRANCH:$SPEC" > "$tmp" 2>/dev/null \
+    || git show "origin/$BRANCH:$SPEC" > "$tmp" 2>/dev/null \
+    || git show "$BRANCH:$(archived_spec)" > "$tmp" 2>/dev/null \
+    || git show "origin/$BRANCH:$(archived_spec)" > "$tmp" 2>/dev/null \
+    || cp "$SPEC" "$tmp"
   printf '%s' "$tmp"
 }
 
@@ -1075,6 +1091,17 @@ ledger_of_branch() {
 # number. So the question is whether the line carries its MEASUREMENT, not whether it carries an x
 # -- and whether the telemetry exists, because /archive-spec can write the whole measured line
 # itself, and a check that asks only about the ledger would then skip `record_telemetry`.
+# The ledger tick is the last thing the closing session writes, after the review and its fixes, so a
+# ticked line on the branch means the unit is closed. A run that finds it does not review the unit
+# again; what can still be owed is the PR and the record, which follow.
+unit_is_ticked() {
+  local tmp rc=1
+  tmp="$(ledger_of_branch)"
+  grep -qE "^- \\[[xX]\\][[:space:]]+\\*\\*$UNIT\\*\\*" "$tmp" && rc=0
+  rm -f "$tmp"
+  return $rc
+}
+
 unit_is_recorded() {
   local tmp rc=1 slug telem
   tmp="$(ledger_of_branch)"
@@ -1136,7 +1163,7 @@ record_telemetry() {
 record_unit() {
   local pr_number="$1"
   local wt="$WORKTREES/$BRANCH"
-  local measured line
+  local measured line spec_in_wt
 
   if unit_is_recorded; then
     log "$UNIT is already recorded"
@@ -1159,6 +1186,9 @@ record_unit() {
 
   record_telemetry "$pr_number" "$wt" "$measured"
 
+  spec_in_wt="$SPEC"
+  [ -f "$wt/$SPEC" ] || spec_in_wt="$(archived_spec)"
+
   log "$UNIT: recording -> $line"
   ( cd "$wt" \
     && awk -v unit="$UNIT" -v m="$line" '
@@ -1172,9 +1202,9 @@ record_unit() {
           print; next
         }
         { print }
-      ' "$SPEC" > "$SPEC.tmp" \
-    && mv "$SPEC.tmp" "$SPEC" \
-    && git add "$SPEC" .ai/telemetry \
+      ' "$spec_in_wt" > "$spec_in_wt.tmp" \
+    && mv "$spec_in_wt.tmp" "$spec_in_wt" \
+    && git add "$spec_in_wt" .ai/telemetry \
     && git commit -q -m "docs(ai): tick $UNIT with its measured size" \
     && git push -q origin "$BRANCH" ) || { escalate "$UNIT" "could not record the tick"; return 1; }
   return 0
@@ -1288,6 +1318,17 @@ while :; do
     TITLE="${NEXT#*|}"
     log "$UNIT: session $SESSIONS builds $PHASE — $TITLE"
     run_session "$(phase_prompt "$SPEC" "$UNIT" "$BRANCH" "$PHASE" "$TITLE" "$STATUS_FILE")" "$JSON_FILE" || break
+  elif unit_is_ticked; then
+    SESSIONS=$((SESSIONS - 1))
+    log "$UNIT: every phase is ticked and the ledger is ticked on $BRANCH; the unit is closed"
+    if [ ! -d "$WORKTREES/$BRANCH" ]; then
+      checkout_worktree "$WORKTREES/$BRANCH" "$BRANCH" >/dev/null 2>&1 \
+        || { escalate "$UNIT" "could not check out $BRANCH to prove and record it"; break; }
+      cp_settings "$WORKTREES/$BRANCH"
+    fi
+    CURRENT_WT="$WORKTREES/$BRANCH"
+    UNIT_OK=1
+    break
   else
     PHASE=""
     log "$UNIT: session $SESSIONS closes the unit: review, ledger tick, archive"
