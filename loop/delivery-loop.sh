@@ -537,6 +537,14 @@ probe_unit() {
       + " " + (.number | tostring)'
 }
 
+# The head commit of the same PR probe_unit reported, or non-zero if it cannot be read. Kept
+# separate so a gh failure stays distinguishable from a PR that genuinely has no head here.
+probe_unit_head() {
+  local branch="$1" out
+  out="$(gh pr list --head "$branch" --state all --json headRefOid 2>/dev/null)" || return 1
+  printf '%s' "$out" | jq -e -r '.[0].headRefOid // empty' 2>/dev/null
+}
+
 # A MERGED PR WHOSE BRANCH IS GONE IS HISTORY, NOT THIS RUN.
 #
 # A spec delivered over more than one pass can reuse a branch name, and `gh pr list --state all`
@@ -544,13 +552,31 @@ probe_unit() {
 # "this run already has a PR". Whether the branch still exists on origin is what separates the two
 # cases, and it is asked of origin rather than inferred.
 probe_run() {
-  local branch="$1" state
+  local branch="$1" state merged_head
   state="$(probe_unit "$branch")"
   case "$state" in
     MERGED*)
       if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
         echo "NONE"
         return 0
+      fi
+      # THE BRANCH EXISTING AGAIN IS NOT THE SAME BRANCH. A run pushes its first phase within the
+      # hour, and from then on the retired name resolves on origin -- so "does it exist" answers
+      # yes for a name this run recreated, and the stale PR reads as a live one. What separates
+      # them is whether the merged PR's head is in what the branch now holds. Reachability, not
+      # `origin/main..`: these PRs squash-merge, so a merged unit's own commits are absent from
+      # main too, and counting commits ahead cannot tell the two cases apart.
+      # Only a POSITIVE answer downgrades. An unreadable gh, a missing object, anything
+      # uncertain leaves MERGED standing, because escalating a live unit is recoverable and
+      # rebuilding one is not.
+      if merged_head="$(probe_unit_head "$branch")" && [ -n "$merged_head" ]; then
+        git cat-file -e "$merged_head^{commit}" 2>/dev/null \
+          || git fetch --quiet origin "$merged_head" 2>/dev/null || true
+        if git cat-file -e "$merged_head^{commit}" 2>/dev/null \
+           && ! git merge-base --is-ancestor "$merged_head" "origin/$branch" 2>/dev/null; then
+          echo "NONE"
+          return 0
+        fi
       fi
       ;;
   esac
