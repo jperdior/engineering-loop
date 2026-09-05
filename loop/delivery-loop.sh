@@ -915,13 +915,17 @@ run_claude() {
 }
 
 # A SESSION REFUSED FOR THE USAGE LIMIT IS A PAUSE, NOT A FAILURE. The unit is neither finished nor
-# wrong; the account is out of quota until it resets. The result names it in its text, since the
-# JSON shape is the same is_error as any other hard failure.
+# wrong; the account is out of quota until it resets. The JSON shape is the same is_error as any
+# other hard failure; what separates it is the HTTP status the CLI reports beside it, `api_error_status`
+# 429. The text is only a fallback for a CLI that does not report the status -- and the CLI's own
+# wording is "session limit", not "usage limit", so a text match alone once let a refusal escalate.
 hit_usage_limit() {
   local json_file="$1"
   [ -s "$json_file" ] || return 1
   [ "$(jq -r '.is_error // false' "$json_file" 2>/dev/null)" = "true" ] || return 1
-  jq -r '.result // ""' "$json_file" 2>/dev/null | grep -qiE 'usage limit|rate limit|quota|too many requests|429'
+  [ "$(jq -r '.api_error_status // 0' "$json_file" 2>/dev/null)" = "429" ] && return 0
+  jq -r '.result // ""' "$json_file" 2>/dev/null \
+    | grep -qiE 'usage limit|session limit|rate limit|quota|too many requests|429'
 }
 
 # ---------------------------------------------------------------------------- verify and prove
