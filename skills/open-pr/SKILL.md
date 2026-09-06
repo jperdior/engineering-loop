@@ -5,6 +5,9 @@ description: Open a GitHub PR for the current branch with a templated body, labe
 
 # Open PR
 
+> **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
+> (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+
 Open a PR for the work already on the current branch (the branch must have commits ahead of the
 base).
 
@@ -34,12 +37,13 @@ Invoke before starting this workflow:
    ```sh
    git push -u origin $(git rev-parse --abbrev-ref HEAD)
    ```
-3. **Read the gate commands** the host declares, so the test plan lists the real ones:
+3. **Read the gate commands**, so the test plan lists the real ones: from the spec this branch
+   carries when there is one, else from the host's `AGENTS.md` validation section.
    ```sh
-   # shellcheck disable=SC1091
-   [ -f .loop/loop.env ] && . .loop/loop.env
-   printf '%s\n' "${LOOP_GATES:-make lint;make test}" | tr ';' '\n'
+   <loop>/parse-ledger.sh .ai/specs/{file}.md --gates
    ```
+   When the prompt names a telemetry file, put its markdown table in the body under a
+   `## Sessions` heading, as it is: the repository carries no telemetry, so the PR is its record.
 4. **Open the PR** with the body template, one test-plan checkbox per gate command:
    ```sh
    gh pr create --base "$BASE" --title "<type>(<scope>): <summary>" --body "$(cat <<'EOF'

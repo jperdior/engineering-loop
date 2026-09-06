@@ -5,6 +5,9 @@ description: Draft or review architectural specs under .ai/specs/. Use when star
 
 # Spec Writing & Review
 
+> **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
+> (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+
 Design and review specifications against **the host repository's own conventions**, as written in its
 root `AGENTS.md` / `CLAUDE.md` and in the nearest such file to the code the spec touches. Adopt the
 **staff engineer** persona — flexible about innovation, uncompromising about the boundaries the host
@@ -57,7 +60,7 @@ analysis and 2-3 alternative designs with trade-offs.
     endpoint its route skill and its test skill, a UI change its page skill and its translation
     skill, and so on. Each name is a backticked skill name that exists in the host. A phase to
     which nothing in the index applies has no `Skills:` line — never an empty one.
-    `.loop/parse-ledger.sh <spec> --skills "Phase N"` reads the line; the delivery loop puts the
+    `<loop>/parse-ledger.sh <spec> --skills "Phase N"` reads the line; the delivery loop puts the
     names in the session's prompt, and `/implement-spec` invokes them before writing. This is the
     only place the host's skills are resolved, and the human who approves the spec reads the
     resolution: a phase that names the wrong skill, or none where one applies, is caught here.
@@ -71,10 +74,10 @@ analysis and 2-3 alternative designs with trade-offs.
     ```
 
     The unit's **branch is its backticked name**, directly after the `**PR N**` label, and it is
-    the branch the delivery loop builds on. `.loop/parse-ledger.sh` reads this grammar, and a spec
+    the branch the delivery loop builds on. `<loop>/parse-ledger.sh` reads this grammar, and a spec
     without this section cannot be implemented — the harness stops and asks. `est ~N` is a
     reviewable-line estimate kept when the line is ticked so estimate-versus-realised stays
-    comparable; **it bounds nothing**. `.loop/unit-size.sh` reports and always exits 0.
+    comparable; **it bounds nothing**. `<loop>/unit-size.sh` reports and always exits 0.
 
     **Never ask the user how to cut the units.** It is not a product decision and
     they should not spend attention on it: one unit unless a deployment seam forces
@@ -100,7 +103,7 @@ analysis and 2-3 alternative designs with trade-offs.
     phase and checks the tick when it exits, and `/implement-spec` dispatches one fresh implementer
     per phase. A phase is therefore cut to what a single session can read and build: one seam, one
     module, the files it must open named in its section. A phase that needs half the tree read
-    first is two phases. `.loop/parse-ledger.sh --phases` reads this checklist, and the loop refuses
+    first is two phases. `<loop>/parse-ledger.sh --phases` reads this checklist, and the loop refuses
     a spec without it.
 
     Keep the checklist parseable. Every unindented checkbox under `## Progress` must be a
@@ -135,7 +138,7 @@ analysis and 2-3 alternative designs with trade-offs.
     directory); `_Excludes:_` the generated paths the docs say nobody reviews; `_Denials:_` the
     commands the docs mark as never run by an agent, as Claude Code permission patterns. Omit a line
     the docs give no basis for. Only commands the docs name — never a guess and never a default.
-    `.loop/parse-ledger.sh <spec> --gates` reads the list; the loop runs it in every session and once
+    `<loop>/parse-ledger.sh <spec> --gates` reads the list; the loop runs it in every session and once
     more on the host, and refuses a spec that declares none. This is why nothing about the host is
     configured in a file for the loop's sake: the contract is re-derived with each spec and approved
     with it, so a change to the host's docs reaches the next feature without anyone editing config.

@@ -7,7 +7,7 @@
 # and the loop's pre-flight asks inspect, because that is the call that says whether the image can be
 # RUN. Loading it as a single image is what makes the tag resolvable.
 #
-# Usage: .loop/sandbox/build.sh          -- builds ${LOOP_IMAGE:-engineering-loop:local}
+# Usage: sandbox/build.sh (from the plugin's loop/)   -- builds ${LOOP_IMAGE:-engineering-loop:local}
 
 set -euo pipefail
 
@@ -22,4 +22,4 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 echo "Built $IMAGE. It carries no credentials: the loop passes CLAUDE_CODE_OAUTH_TOKEN and GH_TOKEN"
-echo "from .loop/loop.env at run time."
+echo "from ~/.config/engineering-loop/loop.env at run time."

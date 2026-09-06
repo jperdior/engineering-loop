@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Walk a human through the two credentials the sandboxed loop needs, and write them to .loop/loop.env.
+# Walk a human through the two credentials the sandboxed loop needs, and write them to the user's
+# settings file: ~/.config/engineering-loop/loop.env (LOOP_ENV overrides the path). The file is the
+# user's and serves every repository; nothing is written into any repository.
 #
 # Both tokens are minted through a browser, so a script cannot fetch them. What it can do is explain
 # each one when it is asked for, write the values with the right file mode, and never echo them back.
@@ -16,16 +18,15 @@ set -euo pipefail
 MODE="${1:-setup}"
 
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd -P)"
-cd "$(git -C "$LOOP_DIR" rev-parse --show-toplevel)"
 
-ENV_FILE=".loop/loop.env"
-TEMPLATE=".loop/loop.env.dist"
+ENV_FILE="${LOOP_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env}"
+TEMPLATE="$LOOP_DIR/loop.env.dist"
 
 case "$MODE" in
   setup|--setup) ;;
   --show)
     if [ ! -f "$ENV_FILE" ]; then
-      echo "Not configured. Run: .loop/setup-loop.sh"
+      echo "Not configured ($ENV_FILE is absent). Run: $LOOP_DIR/setup-loop.sh"
       exit 0
     fi
     echo "Configured in $ENV_FILE:"
@@ -45,6 +46,7 @@ if [ ! -t 0 ]; then
 fi
 
 [ -f "$TEMPLATE" ] || { echo "setup-loop: $TEMPLATE is missing" >&2; exit 3; }
+mkdir -p "$(dirname "$ENV_FILE")"
 [ -f "$ENV_FILE" ] || cp "$TEMPLATE" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
@@ -134,11 +136,11 @@ case "${sandbox:-}" in
   [Nn]*) put LOOP_SANDBOX 0
          echo "     LOOP_SANDBOX=0 -- sessions run on this host, with your ssh keys and gh login." ;;
   *)     put LOOP_SANDBOX 1
-         echo "     LOOP_SANDBOX=1 -- build the image once with:  .loop/sandbox/build.sh" ;;
+         echo "     LOOP_SANDBOX=1 -- build the image once with:  $LOOP_DIR/sandbox/build.sh" ;;
 esac
 
 echo
-echo "Written to $ENV_FILE (0600, gitignored)."
-.loop/setup-loop.sh --show
+echo "Written to $ENV_FILE (0600, outside every repository)."
+"$LOOP_DIR/setup-loop.sh" --show
 echo
-echo "Next:  .loop/delivery-loop.sh <spec> --dry-run"
+echo "Next, in Claude Code:  /ship <what you want>"

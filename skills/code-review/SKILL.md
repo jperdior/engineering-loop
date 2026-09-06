@@ -5,6 +5,9 @@ description: Review code changes (PR, diff, branch, commit) against the host rep
 
 # Code Review
 
+> **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
+> (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+
 ## Superpowers Integration
 
 Invoke before starting this workflow:
@@ -88,7 +91,7 @@ it; error paths handled rather than swallowed.
 
 **NEVER claim "ready to merge" without running the gate.**
 
-Invoke `/run-gates`. It reads the host's `LOOP_GATES` from `.loop/loop.env` and dispatches each
+Invoke `/run-gates`. It reads the host's `LOOP_GATES` from `~/.config/engineering-loop/loop.env` and dispatches each
 command as a parallel subagent.
 
 Rules:

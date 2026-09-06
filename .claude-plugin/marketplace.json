@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "engineering-loop",
-      "description": "From a feature request to a reviewed pull request: interview, spec, audit, one fresh session per spec phase, review, PR. The skills only; the engine is vendored into the host by install.sh.",
+      "description": "From a feature request to a reviewed pull request: interview, spec, audit, one fresh session per spec phase, review, PR. The skills and the loop that drives them; nothing is written into the host repository.",
       "author": {
         "name": "Julio Perdiguer"
       },
