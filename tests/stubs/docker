@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# A `docker` that answers the sandbox pre-flight's three questions and defers to the real one for
-# everything else. Without the deferral this stub would shadow docker for every case in the suite,
-# including the ones that legitimately ask a real daemon whether an image exists.
+# A `docker` that answers the sandbox pre-flight's questions, runs a sandboxed session as a host one,
+# and defers to the real one for everything else. Without the deferral this stub would shadow docker
+# for every case in the suite, including the ones that legitimately ask a real daemon whether an
+# image exists.
 #
 # LOOP_TEST_DOCKER selects:
 #
@@ -11,6 +12,26 @@
 #   nosock   the image is present and the daemon is NOT reachable: the socket is mounted but the
 #            container's uid cannot read it, which is the failure that let a whole unit be built
 #            without a single gate running
+#   nobuildx the image is present but carries no buildx
+#   noorigin git inside the container cannot reach origin
+#
+# A `run` that is not one of the pre-flight probes is a SESSION. The stub records the container's
+# `-v` list, its `--name` and its `--cidfile`, writes a fake container id into that cid file, and
+# then runs `stubs/claude` with the container's own arguments in the container's own `-w` directory
+# -- so a sandboxed case exercises the same build as a host one. Written under $LOOP_TEST_DIR:
+#
+#   mounts.txt      one -v value per line, every session container
+#   names.txt       one --name value per line
+#   cids.txt        `<cidfile path> <fake container id>` per line
+#   docker-run.txt  the whole argument line per run
+#   kills.txt       one container id per `docker kill`
+#   live-cid        the stub's whole notion of "a container that still exists"
+#
+# The crash is staged, not raced. What the real loop must survive is its OWN death leaving the
+# container alive -- `docker run` is the client, and a kill -9 of the driver never gets to `--rm`
+# anything. A stub cannot race that, so it reads a 137 from the session as the same state: the
+# container is still there, `live-cid` stays, and the loop's teardown has to find it by cid and kill
+# it. Any other exit is a container `--rm` removed, which does NOT remove the cid file.
 
 set -euo pipefail
 
@@ -20,6 +41,22 @@ if [ -z "${LOOP_TEST_DOCKER:-}" ]; then
   [ -z "$real" ] && exit 0
   exec "$real" "$@"
 fi
+
+# The two calls the teardown makes to find and kill a container that outlived its loop.
+case "${1:-}" in
+  ps)
+    want="$(printf '%s' "$*" | sed -n 's/.*--filter id=\([0-9a-zA-Z]*\).*/\1/p')"
+    live="$(cat "$LOOP_TEST_DIR/live-cid" 2>/dev/null || true)"
+    if [ -n "$want" ] && [ "$want" = "$live" ]; then printf '%s\n' "$live"; fi
+    exit 0
+    ;;
+  kill)
+    shift
+    for c in "$@"; do printf '%s\n' "$c" >> "$LOOP_TEST_DIR/kills.txt"; done
+    rm -f "$LOOP_TEST_DIR/live-cid"
+    exit 0
+    ;;
+esac
 
 args="$*"
 
@@ -60,4 +97,53 @@ case "$args" in
   *"--entrypoint git"*) exit 0 ;;
 esac
 
-exit 0
+[ "${1:-}" = run ] || exit 0
+
+# ------------------------------------------------------------------------------------ a session
+#
+# The flag set is THIS repository's launch, not docker's: an unknown flag is assumed boolean, so a
+# new value-taking one would have its value read as the image name. The guard below is what makes
+# that loud instead of a vacuous pass.
+printf '%s\n' "$args" >> "$LOOP_TEST_DIR/docker-run.txt"
+
+shift
+cidfile=""
+workdir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --rm|-i|-t|-it|--init|--privileged) shift ;;
+    -v|--volume)      printf '%s\n' "$2" >> "$LOOP_TEST_DIR/mounts.txt"; shift 2 ;;
+    --name)           printf '%s\n' "$2" >> "$LOOP_TEST_DIR/names.txt"; shift 2 ;;
+    --cidfile)        cidfile="$2"; shift 2 ;;
+    -w|--workdir)     workdir="$2"; shift 2 ;;
+    -u|--user|--group-add|-e|--env|--entrypoint) shift 2 ;;
+    -*)               shift ;;
+    *)                shift; break ;;
+  esac
+done
+
+if [ "${1:-}" != "-p" ]; then
+  echo "stub docker: cannot find the container's command in: $args" >&2
+  exit 127
+fi
+
+# Real docker refuses to start at all when the cid file is already there, and `--rm` never deletes
+# one -- so a loop that does not remove it first cannot launch again after a kill.
+if [ -n "$cidfile" ]; then
+  if [ -e "$cidfile" ]; then
+    echo "docker: Container ID file found, make sure the other container isn't running or delete $cidfile" >&2
+    exit 125
+  fi
+  cid="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+  printf '%s' "$cid" > "$cidfile"
+  printf '%s %s\n' "$cidfile" "$cid" >> "$LOOP_TEST_DIR/cids.txt"
+  printf '%s' "$cid" > "$LOOP_TEST_DIR/live-cid"
+fi
+
+selfdir="$(cd "$(dirname "$0")" && pwd)"
+rc=0
+( [ -z "$workdir" ] || cd "$workdir"; "$selfdir/claude" "$@" ) || rc=$?
+
+# 137 stands in for the loop dying with the container alive; anything else is `--rm` doing its job.
+if [ "$rc" != 137 ]; then rm -f "$LOOP_TEST_DIR/live-cid"; fi
+exit "$rc"

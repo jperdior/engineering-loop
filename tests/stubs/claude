@@ -23,31 +23,67 @@
 #   okphase        a phase session that writes OK, which only the closing session may
 #   continueclose  the archive step writes CONTINUE instead of OK
 #   notebox        the archive step leaves an unlabelled checkbox under ## Progress
-#   quota          the second session is refused for the account's usage limit
+#   quota          one session is refused for the account's usage limit: by default the second, the
+#                  way a limit lands mid-run, or the LOOP_TEST_QUOTA_AT-th when a case needs the
+#                  refusal to land on a closing step instead
 #   archived       the closing session moves the ticked spec to .ai/specs/implemented/
+#   killed         exit 137 having written no sentinel and no JSON             (SIGKILL, a signal)
+#   slow           the session does its job, LOOP_TEST_SLEEP seconds later. A run in flight is not
+#                  otherwise observable from outside: a case about two loops at once, or about a
+#                  second loop meeting the first one's lock, needs the first run to still be there
+#   noresume       a launch carrying --resume fails the way the real CLI fails on an id whose
+#                  transcript is gone: exit 1, nothing on stdout, the CLI's own wording on stderr
+#                  (verified against claude 2.1.260). A launch WITHOUT --resume behaves normally,
+#                  which is what makes the fallback session observable.
 #
 # LOOP_TEST_NOPR=1 makes the /open-pr session exit 0 having opened nothing, which real sessions do.
 #
-# Every session appends the model it was started with to $LOOP_TEST_DIR/models.txt.
+# Every session appends the model it was started with to $LOOP_TEST_DIR/models.txt, the id it was
+# launched with to session-ids.txt, the conversation it was told to CONTINUE to resumes.txt, and the
+# id the unit's session record named at the moment it was launched to record-ids.txt. That last one
+# is the only window onto a record the loop rewrites and then drops: no prompt names the record, so
+# the stub reaches it through the sentinel path, which sits beside it.
 
 set -euo pipefail
 
 prompt=""
 model=""
+session_id=""
+resume_id=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    -p)      prompt="$2"; shift ;;
-    --model) model="$2"; shift ;;
+    -p)           prompt="$2"; shift ;;
+    --model)      model="$2"; shift ;;
+    --session-id) session_id="$2"; shift ;;
+    --resume)     resume_id="$2"; shift ;;
   esac
   shift
 done
 
 echo "${model:-unset}" >> "$LOOP_TEST_DIR/models.txt"
+[ -z "$session_id" ] || echo "$session_id" >> "$LOOP_TEST_DIR/session-ids.txt"
+[ -z "$resume_id" ] || echo "$resume_id" >> "$LOOP_TEST_DIR/resumes.txt"
 
 sentinel_line="$(printf '%s\n' "$prompt" | grep -E '^  (OK|CONTINUE) ' | head -1 || true)"
 branch="$(printf '%s' "$sentinel_line" | awk '{ print $2 }')"
 run_id="$(printf '%s' "$sentinel_line" | awk '{ print $NF }')"
-status_file="$(printf '%s\n' "$prompt" | sed -n 's/^  \(.*\.status\)$/\1/p' | head -1)"
+status_file="$(printf '%s\n' "$prompt" | sed -n 's|^  \(.*/status\)$|\1|p' | head -1)"
+
+if [ -n "$status_file" ] && [ -f "$(dirname "$status_file")/session" ]; then
+  sed -n 's/^session_id=//p' "$(dirname "$status_file")/session" >> "$LOOP_TEST_DIR/record-ids.txt"
+fi
+
+# Ahead of every mode that decides anything, and ahead of the /open-pr short-circuit, so EVERY
+# launch of the run is slow.
+if [ "${LOOP_TEST_CLAUDE:-ok}" = slow ]; then
+  sleep "${LOOP_TEST_SLEEP:-2}"
+fi
+
+# A launch whose transcript is gone fails before it reads a thing.
+if [ "${LOOP_TEST_CLAUDE:-ok}" = noresume ] && [ -n "$resume_id" ]; then
+  echo "No conversation found with session ID: $resume_id" >&2
+  exit 1
+fi
 
 # /open-pr is dispatched as its own short session with no sentinel template in it.
 if [ -z "$sentinel_line" ]; then
@@ -84,15 +120,21 @@ case "$mode" in
     echo '{"is_error":true,"subtype":"success","result":"internal server error","permission_denials":[],"total_cost_usd":0.05}'
     exit 0
     ;;
+  killed)
+    # SIGKILL leaves no sentinel, no result JSON and no chance to report anything -- the only trace
+    # is the exit code and whatever is on disk in the worktree.
+    exit 137
+    ;;
   quota)
-    # The SECOND session is refused, the way a limit lands mid-run: one phase is already on the
-    # branch. The count lives in a file because each session is a separate process. The payload is
+    # The SECOND session is refused by default, the way a limit lands mid-run: one phase is already
+    # on the branch. LOOP_TEST_QUOTA_AT=N refuses the (N+1)th launch: 3 lands it on the docs step, 4
+    # on the review. The count lives in a file because each session is a separate process. The payload is
     # the one the CLI actually emits: the 429 sits in api_error_status and the text says "session
     # limit" -- a classifier that only greps the text for "usage limit" escalates on it.
     seen=0
     [ ! -f "$LOOP_TEST_DIR/quota-sessions" ] || seen="$(cat "$LOOP_TEST_DIR/quota-sessions")"
     echo "$((seen + 1))" > "$LOOP_TEST_DIR/quota-sessions"
-    if [ "$seen" = 1 ]; then
+    if [ "$seen" = "${LOOP_TEST_QUOTA_AT:-1}" ]; then
       echo '{"is_error":true,"subtype":"success","api_error_status":429,"result":"You'"'"'ve hit your session limit · resets 3:20am (UTC)","permission_denials":[],"total_cost_usd":0}'
       exit 0
     fi

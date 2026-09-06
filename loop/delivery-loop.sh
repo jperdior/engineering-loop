@@ -7,9 +7,10 @@
 # Usage:
 #   delivery-loop.sh <spec-file> [--dry-run] [--force-unlock]
 #
-#   --dry-run       run pre-flight and print the unit, its branch, its phases and the bounds.
-#                   Creates nothing. Run this first against any real spec.
-#   --force-unlock  take a lock this script refuses to reclaim on its own.
+#   --dry-run       run pre-flight and print the unit, its branch, its phases, the bounds and what
+#                   a re-run would resume. Creates nothing. Run this first against any real spec.
+#   --force-unlock  take THIS UNIT's lock when this script refuses to reclaim it on its own. It
+#                   cannot take one the unit's own session is still behind.
 #
 # Settings are environment variables, read from .loop/loop.env (see loop.env.dist). The shell wins
 # over the file. The main ones:
@@ -21,11 +22,33 @@
 #   SESSION_CONTEXT_ALARM=150000      a session whose peak context exceeds this is reported, not stopped.
 #
 # There is no budget: the unit is built until it is done. A session refused for the account's usage
-# limit pauses the run (exit 5) instead of escalating; re-running the same command continues from
-# the first unticked phase.
+# limit pauses the run (exit 5) instead of escalating; re-running the same command continues the
+# refused session, in the worktree it left behind.
 #
-# Exit: 0 the unit is done or nothing is owed, 2 usage, 3 pre-flight or lock failure, 4 an escalation,
-#       5 paused on the usage limit.
+# A STOP KEEPS ITS WORKTREE. Only the done path reclaims -- after the unit is proved, its PR is open
+# and its tick is recorded. Every other exit leaves the worktree, because the interrupted session's
+# work is only in there. Drop one by hand with `.loop/reclaim-worktree.sh <path>`; the run names the
+# path on its way out. The RECORD of the session in flight is kept by fewer exits than the worktree
+# is: a session that wrote its own `ESCALATE:` had its say, so its record goes and the re-run builds
+# that phase fresh in the tree it left.
+#
+# IT BUILDS WHERE IT IS DRIVEN FROM. Run it from a linked worktree that is already on the unit's
+# branch and the unit is built in THAT tree: no second worktree, no checkout, and no reclaim on any
+# path -- the driver was there before the run and outlives it. Run it from a main checkout and it
+# creates `.claude/worktrees/<branch>`. While a run is in flight the worktree is the loop's: a
+# session commits with `git add -A` unless it was told it inherited a predecessor's tree, so an edit
+# made in it mid-run is swept into the unit. The loop's own state -- the lock and the unit
+# directories -- hangs off the MAIN checkout's .loop/state rather than the driver's; loop.env is read
+# from the driver first and the main checkout second, first writer winning.
+#
+# ONE LOOP PER UNIT, SEVERAL PER REPOSITORY. The lock is `lock/<branch>/`, so two specs build side
+# by side from two shells; everything else a run writes is keyed by branch, bar `.git/config`, which
+# `with_config_lock` serialises. What two runs genuinely share is outside this repository -- the
+# account's usage limit, the host's memory, BuildKit's cache -- and none of it is something a lock
+# can arbitrate.
+#
+# Exit: 0 the unit is done or nothing is owed (the worktree is reclaimed), 2 usage, 3 pre-flight or
+#       lock failure, 4 an escalation, 5 paused on the usage limit. 4 and 5 keep the worktree.
 
 set -euo pipefail
 
@@ -69,6 +92,19 @@ LOOP_DIR="$(cd "$(dirname "${DELIVERY_LOOP_ORIGIN:-$0}")" && pwd -P)"
 cd "$(git -C "$LOOP_DIR" rev-parse --show-toplevel)"
 ROOT="$(pwd -P)"
 
+# The main checkout, which is where the loop's own state lives -- not the tree it is driven from.
+# Driven in place, ROOT is a linked worktree, and everything keyed to it would move with the driver:
+# loop.env (gitignored, so a worktree never has one -- the tokens and LOOP_SANDBOX=1 would silently
+# revert to their defaults), the lock (two drivers of one unit would take two different locks), and
+# the unit directory (transcripts, which a gate then bind-mounts into a container as part of the
+# built tree). All three are properties of the repository, so all three hang off the main checkout.
+# `git worktree list` names the main worktree on its first line whatever the git directory is called;
+# stripping `/.git` off the common dir fails silently under --separate-git-dir or a symlinked .git.
+MAIN_ROOT="$ROOT"
+_main_wt="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
+[ -z "$_main_wt" ] || [ ! -d "$_main_wt" ] || MAIN_ROOT="$(cd "$_main_wt" && pwd -P)"
+unset _main_wt
+
 # The ledger tick is written from inside the unit's worktree, so the spec path must be root-relative
 # to land on the unit's branch rather than in the main checkout.
 case "$SPEC" in
@@ -80,8 +116,12 @@ esac
 #
 # .loop/loop.env holds the settings and the two sandbox credentials. A value already exported in
 # the shell is never overwritten, so `LOOP_MODEL=sonnet .loop/delivery-loop.sh …` still works.
+#
+# Read from the driver first, then the main checkout, first writer winning. The file is gitignored,
+# so a worktree the loop is driven from has none of its own; without the second read an in-place
+# run would find no settings at all.
 load_env_file() {
-  local f="$LOOP_DIR/loop.env" line key val
+  local f="$1" line key val
   [ -f "$f" ] || return 0
 
   # The file holds tokens. GNU stat first: BSD's -c fails while GNU's -f answers something else.
@@ -99,7 +139,8 @@ load_env_file() {
   done < "$f"
 }
 
-load_env_file
+load_env_file "$LOOP_DIR/loop.env"
+[ "$MAIN_ROOT" = "$ROOT" ] || load_env_file "$MAIN_ROOT/.loop/loop.env"
 
 # A session is one phase, and that is what bounds its context. A session cannot observe its own
 # token count, so a budget in the prompt is not obeyed; a phase is observable from outside. The loop
@@ -114,12 +155,50 @@ MAX_SESSIONS="${MAX_SESSIONS:-}"
 
 UNIT_TIMEOUT="${UNIT_TIMEOUT:-7200}"
 
-STATE_DIR="$LOOP_DIR/state"
+STATE_DIR="$MAIN_ROOT/.loop/state"
 LOCK="$STATE_DIR/lock"
+# This run's own lock, `$LOCK/<branch>`, set by acquire_lock. Empty until then, and `teardown` reads
+# it rather than recomputing it from BRANCH: an empty BRANCH would spell `$LOCK//pid`, which is the
+# pre-change repository-wide lock file and belongs to nobody here.
+LOCK_DIR=""
 LEDGER="$STATE_DIR/ledger.$$"
 PHASES="$STATE_DIR/phases.$$"
-WORKTREES="$ROOT/.claude/worktrees"
+WORKTREES="$MAIN_ROOT/.claude/worktrees"
 RUN_ID="$$-$(date +%s)"
+
+# Where this unit is built. Normally a worktree of its own under `.claude/worktrees/<branch>`; when
+# the loop is driven from a linked worktree ALREADY on the unit's branch, that worktree itself --
+# nothing is added, nothing is checked out, and nothing is ever reclaimed, because the driver
+# outlives the run. Both are resolved by pre-flight, once the ledger names the branch.
+IN_PLACE=0
+UNIT_WT=""
+
+# The repository's common `.git`, which is what a container has to see. A linked worktree's `.git` is
+# a FILE reading `gitdir: <main repo>/.git/worktrees/<name>`, so a container given only the file has
+# no repository at all. Resolved by pre-flight; from a main checkout it is ROOT/.git.
+GIT_COMMON="$MAIN_ROOT/.git"
+
+# Everything this unit's session may read or write outside the worktree: the sentinel, the session
+# record, and the transcript the sandbox keeps. Resolved by pre-flight; empty until then.
+UNIT_DIR=""
+
+# The id the current session is launched with, minted on the host and read by both launchers.
+SESSION_ID=""
+
+# The conversation the next session CONTINUES instead of starting. Set by `resume_decision` from the
+# record an interrupted session left, read by both launchers, and cleared after that one session --
+# a resume continues one interrupted session; it is never a mode the rest of the run inherits.
+RESUME_ID=""
+
+# `resume_decision --report` sets this, and it is what makes the decision inert: every branch of it
+# that would drop a record, escalate or set RESUME_ID prints its reason instead. --dry-run creates
+# and destroys nothing, and a dry run inspecting a paused unit must not destroy the resume it is
+# inspecting.
+RESUME_REPORT=0
+
+# How many session containers this run has started. The container ordinal is its own and not the
+# session number, because the PR-opening launch shares the last closing session's.
+CONTAINER_N=0
 
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 LOOP_SANDBOX="${LOOP_SANDBOX:-0}"
@@ -236,8 +315,90 @@ unticked_phases() {
 
 # ---------------------------------------------------------------------------- pre-flight
 
+# The loop builds where it is driven from. A linked worktree already on the unit's branch IS the
+# unit: the spec was written in it, the branch is checked out in it, and a second worktree of the
+# same branch would only split the work across two trees git will not let both hold. So in place the
+# loop adds nothing, checks out nothing, and reclaims nothing, because the tree it was invoked from
+# outlives the run. Both halves are required: a main checkout has `--git-dir` and `--git-common-dir`
+# naming the same directory, and a worktree on some OTHER branch is not this unit's.
+resolve_unit_worktree() {
+  local gitdir common
+
+  gitdir="$(cd "$(git rev-parse --git-dir 2>/dev/null || echo .)" 2>/dev/null && pwd -P || true)"
+  common="$(cd "$(git rev-parse --git-common-dir 2>/dev/null || echo .)" 2>/dev/null && pwd -P || true)"
+  [ -z "$common" ] || GIT_COMMON="$common"
+
+  if [ -n "$BRANCH" ] && [ -n "$gitdir" ] && [ "$gitdir" != "$common" ] \
+     && [ "$(git branch --show-current 2>/dev/null || true)" = "$BRANCH" ]; then
+    IN_PLACE=1
+    UNIT_WT="$ROOT"
+    log "building in place: this worktree is already on $BRANCH, so the unit is built here"
+  else
+    IN_PLACE=0
+    UNIT_WT="$WORKTREES/$BRANCH"
+  fi
+}
+
 preflight() {
   local missing=0
+
+  # The unit is resolved first, because the checks below depend on where it will be built: whether
+  # this tree is the unit's own worktree decides which upstream "behind" is measured against and
+  # what a stop would offer to reclaim. Reading a ledger creates nothing, so it is safe this early.
+  if [ ! -f "$SPEC" ]; then
+    warn "no such spec: $SPEC"
+    return 1
+  fi
+
+  mkdir -p "$STATE_DIR"
+
+  # One unit, read from the ledger, parsed once. The run fails if the ledger does not parse: a
+  # malformed ledger read as an empty list would end "built nothing", exit 0, which is the worst
+  # outcome an unattended tool can produce. Ticked units are history; this run builds the one
+  # unticked unit. Two or more is a deployment-seam decision a human took, built by hand.
+  if ! "$LOOP_DIR/parse-ledger.sh" "$SPEC" > "$LEDGER"; then
+    warn "the ledger in $SPEC does not parse; refusing to run"
+    return 1
+  fi
+  local owed
+  owed="$(awk -F'|' '$1 == " " { n++ } END { print n + 0 }' "$LEDGER")"
+  case "$owed" in
+    0)
+      log "every unit in $SPEC is ticked; nothing is owed"
+      ;;
+    1)
+      UNIT="$(awk -F'|' '$1 == " " { print $2; exit }' "$LEDGER")"
+      BRANCH="$(awk -F'|' '$1 == " " { print $3; exit }' "$LEDGER")"
+      ;;
+    *)
+      warn "the ledger in $SPEC has $owed unticked units; this loop builds exactly one."
+      warn "A spec with several units is built by hand, one /new-feature + /implement-spec per unit."
+      return 1
+      ;;
+  esac
+
+  # The unit owns a directory, and it is the only state its session touches: the sentinel and the
+  # transcript live here rather than beside every other unit's, so two units building at once share
+  # nothing. 700 because a transcript names every file the session read.
+  #
+  # A `/` in the branch name is refused: `units/<branch>` is one path segment, and so is the worktree
+  # directory a host's gates may key state on. Refused here rather than discovered as state written
+  # somewhere nothing else looks.
+  if [ -n "$BRANCH" ]; then
+    case "$BRANCH" in
+      */*)
+        warn "the ledger names branch '$BRANCH', and a branch name may not contain '/'."
+        warn "The loop's per-unit state directory and the unit's worktree directory are each one"
+        warn "path segment. Rename the branch in the ledger (see /new-feature) and re-run."
+        return 1
+        ;;
+    esac
+    UNIT_DIR="$STATE_DIR/units/$BRANCH"
+    mkdir -p "$UNIT_DIR/claude-config"
+    chmod 700 "$UNIT_DIR"
+  fi
+
+  resolve_unit_worktree
 
   # timeout(1) is not part of macOS; it arrives with GNU coreutils.
   TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
@@ -259,10 +420,16 @@ preflight() {
 
   # Running out of disk mid-session leaves a half-built stack nobody can address. POSIX `df -Pk`
   # answers on both GNU and BSD; `df -g` does not exist on Linux.
-  local free_gb
+  local free_gb kept
   free_gb="$(df -Pk "$ROOT" 2>/dev/null | awk 'NR==2 { printf "%d", $4 / 1048576 }')"
   if [ -n "$free_gb" ] && [ "$free_gb" -lt 10 ]; then
     warn "only ${free_gb}GB free; free some space before an unattended run"
+    kept="$(kept_worktrees)"
+    if [ -n "$kept" ]; then
+      warn "these worktrees are kept for a paused or escalated unit. Each one is a resume you would"
+      warn "be giving up:"
+      printf '%s' "$kept" >&2
+    fi
     missing=1
   fi
 
@@ -270,21 +437,45 @@ preflight() {
   # the session commits with `git add -A`, so uncommitted changes would be swept into the unit and
   # found much later on another branch. A dry run only warns: reading the plan is what you do while
   # the tree is still being edited.
+  #
+  # In place, a session record makes the dirt the loop's own. The driver tree IS the unit's tree, a
+  # session commits once at the end of its phase, and an interrupted one therefore leaves everything
+  # it built uncommitted right here -- the exact state a re-run exists to continue. The record is the
+  # proof: it is written before a launch and survives only an outcome the loop never verified. A
+  # dirty tree with no record is still someone's work and is still refused.
   if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-    warn "this tree has uncommitted changes. The run reads its spec and settings from here and the"
-    warn "session commits with \`git add -A\`, so they would be driven by, and swept into, the unit."
-    warn "Commit or stash them, or drive the loop from a checkout nobody else is editing."
-    [ "$DRY_RUN" = 1 ] || missing=1
+    if [ "$IN_PLACE" = 1 ] && [ -f "$UNIT_DIR/session" ]; then
+      log "this tree has uncommitted changes, and $(record_field phase) was in flight here when the"
+      log "last run stopped. They are that session's, and the run continues them."
+    else
+      warn "this tree has uncommitted changes. The run reads its spec and settings from here and the"
+      warn "session commits with \`git add -A\`, so they would be driven by, and swept into, the unit."
+      warn "Commit or stash them, or drive the loop from a checkout nobody else is editing."
+      [ "$DRY_RUN" = 1 ] || missing=1
+    fi
   fi
 
   # A tree behind origin/main runs an older loop, older skills and an older ledger. Behind is the
   # dangerous direction; ahead is how this script is developed.
-  local behind
-  behind="$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
+  #
+  # In place the upstream is the branch's own. A feature branch is behind main the moment main
+  # moves, and that is a rebase question for the PR rather than a stale driver. What is still worth
+  # refusing is a driver behind the branch's own upstream: work another run already pushed that this
+  # tree has not got.
+  local behind upstream
+  upstream=origin/main
+  [ "$IN_PLACE" = 0 ] || upstream="origin/$BRANCH"
+  behind="$(git rev-list --count "HEAD..$upstream" 2>/dev/null || echo 0)"
   if [ "$behind" != 0 ]; then
-    warn "this tree is $behind commit(s) behind origin/main, so the loop, the skills and the ledger"
-    warn "are all older than main. Fix it:"
-    warn "  git checkout main && git pull origin main"
+    if [ "$IN_PLACE" = 1 ]; then
+      warn "this worktree is $behind commit(s) behind $upstream, so a session would build on top of"
+      warn "work that is already pushed. Fix it:"
+      warn "  git pull --ff-only origin $BRANCH"
+    else
+      warn "this tree is $behind commit(s) behind origin/main, so the loop, the skills and the ledger"
+      warn "are all older than main. Fix it:"
+      warn "  git checkout main && git pull origin main"
+    fi
     [ "$DRY_RUN" = 1 ] || missing=1
   fi
 
@@ -352,37 +543,9 @@ preflight() {
 
   [ "$missing" = 0 ] || return 1
 
-  if [ ! -f "$SPEC" ]; then
-    warn "no such spec: $SPEC"
-    return 1
-  fi
-
-  mkdir -p "$STATE_DIR" "$WORKTREES"
-
-  # One unit, read from the ledger, parsed once. The run fails if the ledger does not parse: a
-  # malformed ledger read as an empty list would end "built nothing", exit 0, which is the worst
-  # outcome an unattended tool can produce. Ticked units are history; this run builds the one
-  # unticked unit. Two or more is a deployment-seam decision a human took, built by hand.
-  if ! "$LOOP_DIR/parse-ledger.sh" "$SPEC" > "$LEDGER"; then
-    warn "the ledger in $SPEC does not parse; refusing to run"
-    return 1
-  fi
-  local owed
-  owed="$(awk -F'|' '$1 == " " { n++ } END { print n + 0 }' "$LEDGER")"
-  case "$owed" in
-    0)
-      log "every unit in $SPEC is ticked; nothing is owed"
-      ;;
-    1)
-      UNIT="$(awk -F'|' '$1 == " " { print $2; exit }' "$LEDGER")"
-      BRANCH="$(awk -F'|' '$1 == " " { print $3; exit }' "$LEDGER")"
-      ;;
-    *)
-      warn "the ledger in $SPEC has $owed unticked units; this loop builds exactly one."
-      warn "A spec with several units is built by hand, one /new-feature + /implement-spec per unit."
-      return 1
-      ;;
-  esac
+  # Unused in place, and creating it there would leave an empty `.claude/worktrees/` in a tree
+  # whose whole point is that the loop builds in it rather than beside it.
+  [ "$IN_PLACE" = 1 ] || mkdir -p "$WORKTREES"
 
   # A spec without a phase checklist gives the loop nothing to hand a session, so it is refused
   # here rather than discovered after a session was paid for.
@@ -410,46 +573,104 @@ preflight() {
 
 # ---------------------------------------------------------------------------- the lock
 #
+# The lock is per unit: `lock/<branch>/{pid,snapshot}` under one shared parent. A repository-wide
+# lock refused a second spec for no reason a run can point at -- the worktree and the unit directory
+# are keyed by branch already, so two units contend over nothing this script owns.
+#
 # Reclaiming a stale lock is a single atomic rename, so two loops that both see it cannot both
 # "reclaim" it and delete each other's fresh lock. A PID alone does not identify the holder either:
-# the OS recycles them, so the holder must be a PID whose command line is this script.
+# the OS recycles them, so the holder must be a PID whose command line is the snapshot the lock
+# recorded. Grepping for `delivery-loop.sh` was not that check: a running loop executes from its
+# `mktemp -t delivery-loop.XXXXXX` snapshot, whose name has no `.sh`, so every live loop read as
+# stale and the next run took its lock.
 
 lock_holder_is_alive() {
-  local pid="$1"
+  local pid="$1" snapshot="${2:-}" cmd
   [ -n "$pid" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  ps -o command= -p "$pid" 2>/dev/null | grep -q 'delivery-loop.sh'
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+  if [ -z "$snapshot" ]; then
+    # No snapshot was recorded, so the holder is a loop from before this change. `delivery-loop\.`
+    # covers `delivery-loop.sh` and either mktemp flavour's name.
+    printf '%s\n' "$cmd" | grep -q 'delivery-loop\.'
+  else
+    case "$cmd" in *"$snapshot"*) true ;; *) false ;; esac
+  fi
+}
+
+write_lock() {
+  LOCK_DIR="$1"
+  echo "$$" > "$LOCK_DIR/pid"
+  printf '%s\n' "${DELIVERY_LOOP_SNAPSHOT:-}" > "$LOCK_DIR/snapshot"
 }
 
 acquire_lock() {
-  if mkdir "$LOCK" 2>/dev/null; then
-    echo "$$" > "$LOCK/pid"
+  # Two statements, not one `local`: bash expands every argument to `local` before the builtin runs,
+  # so `local branch="$1" dir="$LOCK/$branch"` reads `branch` in the caller's scope.
+  local branch="$1"
+  local dir="$LOCK/$branch"
+
+  # A session of this unit that is still running outranks --force-unlock. The lock answers "is a
+  # loop running"; the unit's record answers "is a SESSION running", holding the worktree a resume
+  # would reuse -- and two writers in one worktree is what keeping the worktree exists to avoid.
+  if [ "$FORCE_UNLOCK" = 1 ] \
+     && { lock_holder_is_alive "$(record_field host_pid)" "$(record_field snapshot)" \
+          || session_container_is_running; }; then
+    warn "--force-unlock refused: a session of $UNIT is still running and holds $UNIT_WT."
+    warn "Kill it first (docker ps --filter name=delivery-loop-), then re-run."
+    return 1
+  fi
+
+  # The pre-change lock is `lock/` itself, with a `lock/pid` inside it, and it is repository-wide.
+  # Respected as such while its pid is alive, and swept when it is dead, or the first run after this
+  # change would refuse forever.
+  if [ -f "$LOCK/pid" ]; then
+    local legacy
+    legacy="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    if lock_holder_is_alive "$legacy"; then
+      warn "another delivery loop is running (pid $legacy). It predates the per-unit lock, so it"
+      warn "holds the whole repository. Wait for it, or kill it first."
+      return 1
+    fi
+    if [ "$FORCE_UNLOCK" != 1 ] && [ -n "$legacy" ] && kill -0 "$legacy" 2>/dev/null; then
+      warn "the repository-wide lock names pid $legacy, which is alive but is NOT a delivery loop --"
+      warn "a recycled PID. Re-run with --force-unlock if you are sure no loop is running."
+      return 1
+    fi
+    warn "sweeping a repository-wide lock from before the per-unit lock (pid ${legacy:-unknown})"
+    rm -f "$LOCK/pid"
+  fi
+
+  mkdir -p "$LOCK"
+
+  if mkdir "$dir" 2>/dev/null; then
+    write_lock "$dir"
     return 0
   fi
 
   local pid
-  pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  pid="$(cat "$dir/pid" 2>/dev/null || true)"
 
-  if lock_holder_is_alive "$pid"; then
-    warn "another delivery loop is running (pid $pid). Wait for it, or kill it first."
+  if lock_holder_is_alive "$pid" "$(cat "$dir/snapshot" 2>/dev/null || true)"; then
+    warn "another delivery loop is running on $branch (pid $pid). Wait for it, or kill it first."
     return 1
   fi
 
   if [ "$FORCE_UNLOCK" != 1 ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    warn "the lock names pid $pid, which is alive but is NOT a delivery loop -- a recycled PID."
+    warn "the lock on $branch names pid $pid, which is alive but is NOT a delivery loop -- a recycled PID."
     warn "Re-run with --force-unlock if you are sure no loop is running."
     return 1
   fi
 
-  warn "reclaiming a stale lock (pid ${pid:-unknown})"
-  if ! mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null; then
+  warn "reclaiming a stale lock on $branch (pid ${pid:-unknown})"
+  if ! mv "$dir" "$dir.stale.$$" 2>/dev/null; then
     warn "another loop reclaimed the lock first; standing down."
     return 1
   fi
-  rm -rf "$LOCK.stale.$$"
+  rm -rf "$dir.stale.$$"
 
-  if mkdir "$LOCK" 2>/dev/null; then
-    echo "$$" > "$LOCK/pid"
+  if mkdir "$dir" 2>/dev/null; then
+    write_lock "$dir"
     return 0
   fi
 
@@ -457,20 +678,323 @@ acquire_lock() {
   return 1
 }
 
-# shellcheck disable=SC2329  # reached through `trap teardown EXIT INT TERM`
+# The one thing two units really share is `.git/config`, and git does not wait for it.
+# `git worktree add -b <branch> <wt> origin/<ref>` sets the new branch's upstream, a write to the
+# repository's config under a `config.lock` git takes optimistically: two loops adding a worktree in
+# the same second race for it, and one exits 255 with "could not lock config file". The loser's
+# BRANCH survives the failure, so a naive retry fails again on `a branch named 'x' already exists`.
+# Serialised on a lock of its own, held for the length of one git command and never across a session.
+CONFIG_LOCK="$STATE_DIR/config.lock"
+
+with_config_lock() {
+  local i=0 rc=0
+  while ! mkdir "$CONFIG_LOCK" 2>/dev/null; do
+    i=$((i + 1))
+    # A loop killed mid-add leaves the directory behind, and no later run would ever add a worktree
+    # again. Taken after 30s -- far longer than any `git worktree add` -- rather than refused.
+    if [ "$i" -gt 300 ]; then
+      warn "waited 30s for $CONFIG_LOCK; taking it. Remove it by hand if no other loop is running."
+      rm -rf "$CONFIG_LOCK"
+      mkdir "$CONFIG_LOCK" 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+  done
+  "$@" || rc=$?
+  rmdir "$CONFIG_LOCK" 2>/dev/null || true
+  return "$rc"
+}
+
+# Teardown never reclaims the worktree. It runs on every exit, including the ones that stop with the
+# phase half-built -- a usage limit, a signal, a kill -- and the work of a session that could not
+# report is only in that worktree. The only reclaim is on the done path, after the unit is proved
+# and recorded.
+#
+# shellcheck disable=SC2329  # reached through `trap teardown EXIT INT TERM HUP`
 teardown() {
   local rc=$?
   rm -f "${DELIVERY_LOOP_SNAPSHOT:-}"
-  if [ -n "$CURRENT_WT" ] && [ -d "$CURRENT_WT" ]; then
-    warn "tearing down $CURRENT_WT"
-    "$LOOP_DIR/reclaim-worktree.sh" "$CURRENT_WT" >&2 || true
-    CURRENT_WT=""
-  fi
   rm -f "$LEDGER" "$PHASES" "$PHASES.spec" "$PHASES.err"
-  if [ -f "$LOCK/pid" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ]; then
-    rm -rf "$LOCK"
+  kill_session_container
+  # This unit's directory and nothing above it. The parent `lock/` stays: an `rmdir` of it would
+  # race a sibling loop's `mkdir -p`, and it sits in the gitignored state dir and costs nothing.
+  if [ -n "$LOCK_DIR" ] && [ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
+    rm -rf "$LOCK_DIR"
   fi
   exit "$rc"
+}
+
+# A container can outlive the loop that started it. `docker run` is the CLIENT: a kill -9 of the
+# driver, a dropped SSH session or a memory kill of it never reaches `--rm`, and what is left is a
+# container still holding the worktree, the common `.git` and GH_TOKEN -- the very worktree the next
+# run picks the phase up in, so the alternative to killing it here is two writers.
+#
+# Guarded with `|| true` like every other teardown command: a kill of a container already gone --
+# the ordinary case, since `--rm` has usually removed it -- would otherwise end the trap under
+# `set -e` before the lock is released.
+# shellcheck disable=SC2329  # reached through `teardown`, which the trap reaches
+kill_session_container() {
+  local cid
+  [ -n "$UNIT_DIR" ] && [ -f "$UNIT_DIR/cid" ] || return 0
+  cid="$(cat "$UNIT_DIR/cid" 2>/dev/null || true)"
+  if [ -n "$cid" ] && [ -n "$(docker ps -q --no-trunc --filter "id=$cid" 2>/dev/null || true)" ]; then
+    warn "killing the session container still running as $cid"
+    docker kill "$cid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$UNIT_DIR/cid" || true
+}
+
+# The same cid, asked instead of killed. Never reads a MISSING cid as "nothing is running":
+# `teardown` removes the file on every ordinary way out, so its absence is the normal case and the
+# record's `host_pid` is the check that survives it.
+session_container_is_running() {
+  local cid
+  [ -n "$UNIT_DIR" ] && [ -f "$UNIT_DIR/cid" ] || return 1
+  cid="$(cat "$UNIT_DIR/cid" 2>/dev/null || true)"
+  [ -n "$cid" ] || return 1
+  [ -n "$(docker ps -q --no-trunc --filter "id=$cid" 2>/dev/null || true)" ]
+}
+
+# ---------------------------------------------------------------------------- the session record
+#
+# A session that dies leaves nothing behind saying what it was doing. The sentinel is written by the
+# session, so a kill, a signal or the account's usage limit produces no sentinel at all, and the
+# loop's own memory of which phase was in flight dies with the process that held it.
+#
+# The record is the host's note, written before the session starts and removed once the session has
+# reported on itself: the phase (or `closing:<step>`), the session id, where the branch stood on
+# origin at launch, and which loop launched it. It is the LOOP's file -- no prompt names it and no
+# session reads it.
+
+record_field() {
+  local key="$1" file="${2:-$UNIT_DIR/session}"
+  [ -f "$file" ] || return 0
+  sed -n "s/^$key=//p" "$file" | head -1
+}
+
+drop_record() {
+  [ -z "$UNIT_DIR" ] || rm -f "$UNIT_DIR/session"
+}
+
+# The id is minted on the host and handed to the session, because resuming one means naming a
+# conversation the loop never sees the inside of. `uuidgen` is not everywhere and /proc/…/uuid is
+# Linux's; neither is a pre-flight requirement, because a session with no id is a session that
+# cannot be resumed -- which is what every session was until now -- and not a run worth refusing.
+mint_session_id() {
+  SESSION_ID="$(uuidgen 2>/dev/null | tr 'A-F' 'a-f' || true)"
+  [ -n "$SESSION_ID" ] || SESSION_ID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+}
+
+# `origin_tip` is read here rather than reconstructed afterwards: it is what says whether the branch
+# moved under an interrupted session. It is EMPTY for a branch never pushed -- a first phase killed
+# before its first push -- and that case must resume, not be told its branch is gone. An origin that
+# could not be read is `unknown`, not empty: the two cannot be told apart afterwards, and the resume
+# decision skips both remote guards on an empty tip.
+write_session_record() {
+  local phase="$1" tip listing
+  if listing="$(git ls-remote --heads origin "$BRANCH" 2>/dev/null)"; then
+    tip="$(printf '%s\n' "$listing" | awk '{ print $1 }')"
+  else
+    tip=unknown
+  fi
+  {
+    printf 'phase=%s\n' "$phase"
+    printf 'session_id=%s\n' "${SESSION_ID:-$RESUME_ID}"
+    printf 'origin_tip=%s\n' "$tip"
+    printf 'run_id=%s\n' "$RUN_ID"
+    printf 'host_pid=%s\n' "$$"
+    printf 'snapshot=%s\n' "${DELIVERY_LOOP_SNAPSHOT:-}"
+    printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$UNIT_DIR/session"
+}
+
+# A kept worktree is how disk now disappears. Only the done path reclaims, so every paused or
+# escalated unit leaves a worktree behind, and the disk refusal names them: otherwise it says what
+# is wrong without saying where the space went.
+kept_worktrees() {
+  local rec branch wt
+  for rec in "$STATE_DIR"/units/*/session; do
+    [ -f "$rec" ] || continue
+    branch="$(basename "$(dirname "$rec")")"
+    wt="$WORKTREES/$branch"
+    [ -d "$wt" ] || continue
+    # Never the tree this loop is running in. In place that tree is the unit, and reclaim-worktree.sh
+    # would drop the driver, the branch's only checkout and the run itself.
+    [ "$wt" != "$ROOT" ] || continue
+    printf '  %s — %s — drop it with: .loop/reclaim-worktree.sh %s\n' \
+      "$wt" "$(record_field phase "$rec")" "$wt"
+  done
+}
+
+# What to tell a human about the unit's tree, and it is not the same sentence in both modes. Created
+# for the unit, the tree is the loop's to offer up. Built in place it is the DRIVER's: the branch's
+# only checkout, and while a phase is interrupted the only copy of that phase's work. Naming
+# reclaim-worktree.sh for it would name the command that destroys the very thing the escalation
+# exists to protect.
+unit_tree_advice() {
+  if [ "$IN_PLACE" = 1 ]; then
+    printf 'resolve it in %s — that is your own worktree, not one the loop made' "$UNIT_WT"
+  else
+    printf 'reclaim %s by hand with .loop/reclaim-worktree.sh %s' "$UNIT_WT" "$UNIT_WT"
+  fi
+}
+
+kept_worktree_note() {
+  local wt="$UNIT_WT" phase
+  [ "$IN_PLACE" = 0 ] || return 0
+  [ -d "$wt" ] || return 0
+  phase="$(record_field phase)"
+  printf 'worktree kept at %s; the next run resumes %s — reclaim by hand with .loop/reclaim-worktree.sh %s' \
+    "$wt" "${phase:-the first unticked phase}" "$wt"
+}
+
+# ---------------------------------------------------------------------------- the resume decision
+#
+# A re-run continues the interrupted session, it does not rebuild its phase. The session committed
+# nothing -- one commit at the end of a phase is the shape -- so everything it did is uncommitted in
+# a worktree that is now kept, and starting a fresh session on top of it would have that session
+# discover half its own work as a stranger's. `--resume` hands the conversation back.
+#
+# Read in the order below, and the order is the design. Ticks are tested before tips because a
+# session that pushed its tick moved the tip too. Both remote checks are gated on a non-empty
+# recorded tip: an empty one is a branch that had never been pushed.
+#
+# It escalates rather than guesses whenever something else may be holding the same worktree, or
+# whenever the branch is not where the interrupted session left it. An escalation is recoverable,
+# and a resume into a tree another writer owns is not.
+
+# A closing step's record is `closing:<step>`. Resuming it means the steps before it are done in
+# this run too -- the docs sync is not repeated because the review was the one interrupted.
+closing_step_of_record() {
+  case "$1" in closing:*) printf '%s' "${1#closing:}" ;; esac
+}
+
+mark_closing_steps_before() {
+  local target="$1" s
+  CLOSING_DONE=""
+  for s in $CLOSING_STEPS; do
+    [ "$s" != "$target" ] || return 0
+    CLOSING_DONE="$CLOSING_DONE $s"
+  done
+  CLOSING_DONE=""
+}
+
+resume_decision() {
+  RESUME_REPORT=0
+  [ "${1:-}" != --report ] || RESUME_REPORT=1
+
+  local rec="$UNIT_DIR/session" wt="$UNIT_WT"
+  local phase id tip current listing next want step
+
+  if [ ! -f "$rec" ]; then
+    [ "$RESUME_REPORT" = 0 ] || log "resume: none (no interrupted session)"
+    return 0
+  fi
+
+  phase="$(record_field phase)"
+  id="$(record_field session_id)"
+  tip="$(record_field origin_tip)"
+
+  # reclaim-worktree.sh does not delete the record, and it is the documented way a human refuses a
+  # resume by hand.
+  if [ ! -d "$wt" ]; then
+    resume_fresh "a session record names ${phase:-an unnamed phase} but $wt is gone"
+    return 0
+  fi
+
+  step="$(closing_step_of_record "$phase")"
+  if [ -n "$phase" ] && [ -z "$step" ] && phase_is_ticked "$phase"; then
+    resume_fresh "$phase is ticked on origin, so the interrupted session finished it"
+    return 0
+  fi
+
+  if lock_holder_is_alive "$(record_field host_pid)" "$(record_field snapshot)" \
+     || session_container_is_running; then
+    resume_stop "an earlier session of $UNIT is still running; ${phase:-its phase} is in flight in $wt" || return 1
+    return 0
+  fi
+
+  # `unknown` is a tip the launching run could not read: not empty, not a sha, so neither remote
+  # guard can run against it. A session may have pushed under it; refusing is the only answer that
+  # cannot resume onto a branch someone else has moved.
+  if [ "$tip" = unknown ]; then
+    resume_stop "the run that launched ${phase:-that session} could not read origin, so where $BRANCH stood is unrecorded; $(unit_tree_advice)" || return 1
+    return 0
+  fi
+
+  if [ -n "$tip" ]; then
+    # An unreadable origin is not a deleted branch. `ls-remote` answers 0 and nothing for a branch
+    # that is gone, and non-zero when it could not ask -- and the two want opposite reactions.
+    if ! listing="$(git ls-remote --heads origin "$BRANCH" 2>/dev/null)"; then
+      resume_stop "origin could not be read while ${phase:-a session} was in flight, so whether $BRANCH still exists is unknown; re-run when origin is reachable" || return 1
+      return 0
+    fi
+    current="$(printf '%s\n' "$listing" | awk '{ print $1 }')"
+    if [ -z "$current" ]; then
+      resume_stop "$BRANCH is gone from origin while ${phase:-a session} was in flight; $(unit_tree_advice)" || return 1
+      return 0
+    fi
+    # Any non-zero reads as "not an ancestor", including the 128 for a sha a force-push made
+    # unreachable: someone advanced this branch under a session that is still holding the worktree.
+    if ! git merge-base --is-ancestor "$tip" "$current" 2>/dev/null; then
+      resume_stop "$BRANCH moved under an interrupted session ($tip is not in $current); $(unit_tree_advice)" || return 1
+      return 0
+    fi
+  fi
+
+  if [ -z "$id" ]; then
+    resume_fresh "the interrupted session left no id to resume"
+    return 0
+  fi
+
+  # The record has to name the work this run is about to do. A record for some other phase is a
+  # record the branch has moved past, and resuming it would hand a session the wrong prompt. A
+  # closing step's record is honoured when every phase is ticked and the step is one of ours.
+  next="$(next_phase)"
+  want="${next%%|*}"
+  if [ -z "$want" ]; then
+    case " $CLOSING_STEPS " in
+      *" $step "*) want="closing:$step" ;;
+      *)           want="closing:$(next_closing_step)" ;;
+    esac
+  fi
+  if [ "$phase" != "$want" ]; then
+    resume_fresh "the record names ${phase:-nothing} but $want is what is owed"
+    return 0
+  fi
+
+  if [ "$RESUME_REPORT" = 1 ]; then
+    log "resume: $phase from session $id"
+    return 0
+  fi
+
+  [ -z "$step" ] || mark_closing_steps_before "$step"
+  RESUME_ID="$id"
+  log "$UNIT: continuing the interrupted session for $phase in $wt"
+  return 0
+}
+
+# The two ways the decision above ends badly, each said once. In report-only mode neither of them
+# acts: the reason is printed under the same `resume:` prefix as a decision that succeeded, and the
+# caller carries on as if there had been no record at all.
+resume_fresh() {
+  if [ "$RESUME_REPORT" = 1 ]; then
+    log "resume: none ($1)"
+  else
+    log "$UNIT: $1; starting fresh"
+    drop_record
+  fi
+}
+
+# Returns 1 only on the run path, where a resume into a worktree that may still have a writer, or
+# onto a branch that moved under it, is a question for a human. Reporting one is not.
+resume_stop() {
+  if [ "$RESUME_REPORT" = 1 ]; then
+    log "resume: none ($1)"
+    return 0
+  fi
+  escalate "$UNIT" "$1"
+  return 1
 }
 
 # ---------------------------------------------------------------------------- unit helpers
@@ -478,9 +1002,9 @@ teardown() {
 checkout_worktree() {
   local wt="$1" branch="$2"
   if git rev-parse --verify --quiet "$branch" >/dev/null; then
-    git worktree add "$wt" "$branch"
+    with_config_lock git worktree add "$wt" "$branch"
   else
-    git worktree add -b "$branch" "$wt" "origin/$branch"
+    with_config_lock git worktree add -b "$branch" "$wt" "origin/$branch"
   fi
 }
 
@@ -647,9 +1171,9 @@ closing_prompt() {
 Every phase of an approved spec is built and ticked on this branch. The unit is closed in three
 steps, each in its own session; you run exactly one of them, unattended, and stop before the PR.
 
-This is a headless session. The moment you end your turn the process exits, this worktree is
-removed, and anything not pushed is gone. So nothing runs in the background -- run gates and
-reviewers in the foreground and wait for them -- and commit and push before you write the sentinel.
+This is a headless session. The moment you end your turn the process exits, and anything not pushed
+is invisible to the loop. So nothing runs in the background -- run gates and reviewers in the
+foreground and wait for them -- and commit and push before you write the sentinel.
 
 Spec:   $spec
 Unit:   $unit - branch $branch
@@ -671,14 +1195,113 @@ Never leave it unwritten. A missing file is treated as an escalation.
 PROMPT
 }
 
+# The session being resumed already has its original prompt: `--resume` restores the conversation,
+# so this one does not restate the phase's instructions. It says what happened, where the work
+# actually stands, and what to write on the way out -- and it names THIS run's id, because the
+# sentinel is checked against the run that reads it and the session is carrying the one it was given
+# the night it started. The sentinel block is the session's kind and nothing else, because the run id
+# is read as the last field of that line.
+continuation_prompt() {
+  local spec="$1" unit="$2" branch="$3" phase="$4" title="$5" status_file="$6" step="${7:-}"
+  local what doing word meaning
+
+  if [ -n "$phase" ]; then
+    what="Phase:  $phase — $title"
+    doing="building $phase of $unit"
+    word="CONTINUE"
+    meaning="this phase is built, gated, ticked and pushed; the next session takes the next phase"
+  else
+    what="Step:   $step"
+    doing="running the closing step '$step' of $unit"
+    word="CONTINUE"
+    meaning="this step is done and pushed; the next step runs in a fresh session"
+    if [ "$step" = archive ]; then
+      word="OK"
+      meaning="the unit is reviewed, ticked and pushed"
+    fi
+  fi
+
+  cat <<PROMPT
+You were $doing on $branch and the session was interrupted: the usage limit, a signal, or a kill.
+Nothing about the unit is wrong. The worktree is exactly as you left it.
+
+Spec:   $spec
+Unit:   $unit - branch $branch
+$what
+Base:   all diffs, gates and reviews for this unit are against $UNIT_BASE, never main.
+
+Run \`git status\` and \`git log origin/$branch..HEAD\` first: they say what is committed, what is
+not, and whether you had pushed. Continue from where the work actually stands, not from where you
+remember it standing. Do not start over. The steps, the gates and the commit shape are the ones your
+original prompt gave you, with one change: review every changed path before you keep or discard it,
+and stage paths by name — never \`git add -A\` in a worktree another session wrote.
+PROMPT
+
+  [ -n "$phase" ] || cat <<'PROMPT'
+
+The step may be half done: a fix wave half applied, the ledger line already ticked, the spec
+already moved to its implemented/ directory. Re-derive each before redoing it; every closing step is
+idempotent when you check first.
+PROMPT
+
+  [ -z "$phase" ] || printf '\n%s\n' "$(resolve_block)"
+
+  cat <<PROMPT
+
+Before exiting, write exactly one line to this file
+  $status_file
+That line is one of:
+  $word $branch <the sha you pushed> $RUN_ID
+                              $meaning
+  ESCALATE:<one-line reason>  for anything else.
+Never leave it unwritten; a missing file is treated as an escalation. The run id above is THIS
+run's, not the one your original prompt carried.
+PROMPT
+}
+
+# The conversation is gone but the work is not. This is the session's own prompt again -- there is
+# no conversation left to continue -- with the one thing it could not otherwise know prepended: the
+# tree it starts in is not clean, and the changes in it are its predecessor's. `git add -A` in that
+# tree is how an interrupted session's half-finished edits get committed as though reviewed.
+fallback_prompt() {
+  cat <<'BLOCK'
+A previous session of this unit worked in this worktree and is not being continued. Its work is on
+disk, uncommitted, and possibly incomplete. Run `git status` first. Review every changed path before
+you keep or discard it, and stage paths by name — never `git add -A` here.
+BLOCK
+  printf '\n%s\n' "$1"
+}
+
+# A `--resume` can fail for a reason that is not about the unit. The transcript the id names lives
+# on disk -- pruned, wiped, or never persisted by a container -- and when it is gone the CLI exits
+# before it reads the prompt: nothing on stdout, "No conversation found with session ID: <id>" on
+# stderr (verified against claude 2.1.260 with a bogus id).
+#
+# A timeout is a session that ran, and a usage limit is a 429 the loop reports as a pause; both are
+# excluded by name. A sentinel excludes it outright: the status file is removed before every session,
+# so one that exists here was written by the session just launched -- proof the conversation resumed
+# and ran. Without this, an `ESCALATE:` whose reason contains "not found" would classify as a dead
+# transcript and the loop would re-spend the phase and bypass the human gate. The pattern reads the
+# CLI's stderr only: a session's own summary can easily contain "not found".
+resume_failed() {
+  local rc="$1" json_file="$2"
+  [ "$rc" != 124 ] || return 1
+  ! hit_usage_limit "$json_file" || return 1
+  [ ! -f "$UNIT_DIR/status" ] || return 1
+  [ -s "$json_file" ] || return 0
+  grep -qiE 'no conversation|not found|could not (find|resume)' "$json_file.err" 2>/dev/null
+}
+
 # ---------------------------------------------------------------------------- build
 
 # settings.local.json is gitignored, so it is absent from every worktree the loop creates. The copy
-# gives the session the permissions the human has already proved sufficient.
+# gives the session the permissions the human has already proved sufficient. The driver's first, the
+# main checkout's as a fallback: a driver that is itself a worktree has none of its own.
 cp_settings() {
-  local wt="$1"
+  local wt="$1" src="$ROOT/.claude/settings.local.json"
+  [ -f "$src" ] || src="$MAIN_ROOT/.claude/settings.local.json"
   mkdir -p "$wt/.claude"
-  [ ! -f "$ROOT/.claude/settings.local.json" ] || cp "$ROOT/.claude/settings.local.json" "$wt/.claude/settings.local.json"
+  [ ! -f "$src" ] || cp "$src" "$wt/.claude/settings.local.json"
 }
 
 # One session. The worktree is continued when it exists, checked out when the branch exists on
@@ -686,12 +1309,25 @@ cp_settings() {
 # sessions and is never rebuilt. A local branch that never reached origin is dropped only when it
 # holds nothing beyond origin/main, which is what a session that never committed leaves behind; one
 # that carries commits may be someone's work, so the loop stops and asks rather than deleting it.
+#
+# `label` is what the session record names: the phase, or `closing:<step>`. `fresh_prompt` is the
+# prompt this session would have been given had there been nothing to resume; it is used for one
+# thing, the fallback when the conversation named by RESUME_ID turns out not to exist.
 run_session() {
-  local prompt="$1" json_file="$2"
-  local wt="$WORKTREES/$BRANCH" rc
+  local prompt="$1" json_file="$2" label="$3" fresh_prompt="${4:-}"
+  local wt="$UNIT_WT" rc
 
-  if [ -d "$wt" ]; then
+  if [ "$IN_PLACE" = 1 ]; then
+    # The driver is the unit. Nothing to add, nothing to check out, and CURRENT_WT is deliberately
+    # left empty -- it is what the done path reclaims by, and the one tree that must never be
+    # reclaimed is the one this process is running in.
+    :
+  elif [ -d "$wt" ]; then
+    # A kept worktree outlives the run that created it, so the driver's settings have to reach a
+    # session that lands in one: copying them only where the worktree is created would pin a unit
+    # built over more than one run to whatever permissions were current the night it started.
     CURRENT_WT="$wt"
+    cp_settings "$wt"
   elif git rev-parse --verify --quiet "origin/$BRANCH" >/dev/null; then
     checkout_worktree "$wt" "$BRANCH" || { escalate "$UNIT" "could not check out $BRANCH"; return 1; }
     CURRENT_WT="$wt"
@@ -705,7 +1341,7 @@ run_session() {
       git branch -D "$BRANCH" >/dev/null 2>&1 || true
     fi
     log "$UNIT: worktree $wt on $BRANCH from origin/main"
-    if ! git worktree add -b "$BRANCH" "$wt" origin/main; then
+    if ! with_config_lock git worktree add -b "$BRANCH" "$wt" origin/main; then
       escalate "$UNIT" "git worktree add failed; not running claude into a directory that is not there"
       return 1
     fi
@@ -718,14 +1354,52 @@ run_session() {
   # is why the check is not in pre-flight.
   if [ "$LOOP_SANDBOX" = "1" ] && ! sandbox_sees_repo "$wt"; then
     escalate "$UNIT" "the sandbox container cannot resolve this worktree's git repository"
-    warn "A linked worktree's .git names an absolute path into the main repo. Both it and"
-    warn "\$ROOT/.git must be mounted, read-write -- git writes refs, objects and the index there."
+    warn "A linked worktree's .git names an absolute path into the main repo. Both it and the"
+    warn "repository's common git directory must be mounted, read-write -- git writes refs,"
+    warn "objects and the index there."
     return 1
+  fi
+
+  # Written before the launch, because after it there may be no loop left to write anything: the
+  # record is what survives a session the loop never hears back from. A continuation mints nothing:
+  # `--resume` names a conversation that already has an id, and both launchers spell the flag as
+  # `${SESSION_ID:+--session-id ...}`, so clearing SESSION_ID is how `--session-id` is dropped. The
+  # record keeps naming the id being resumed, so a second interruption can resume it again.
+  if [ -n "$RESUME_ID" ]; then
+    SESSION_ID=""
+  else
+    mint_session_id
+  fi
+  write_session_record "$label"
+
+  # A fresh session in a tree that is not clean is the fallback's situation under another name. It
+  # happens whenever a kept worktree is reused without a resume -- the record was dropped because the
+  # session that made the mess reported an `ESCALATE:`, or named a phase the branch has moved past.
+  # Its own prompt would tell it to `git add -A`, which is how a predecessor's half-finished work
+  # lands, unreviewed, in this phase's one commit.
+  if [ -z "$RESUME_ID" ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+    log "$UNIT: $wt has uncommitted work from an earlier session; the session is told to stage by name"
+    prompt="$(fallback_prompt "$prompt")"
   fi
 
   run_claude "$wt" "$prompt" "$json_file" "$LOOP_MODEL"
   rc=$?
   [ "$rc" = 124 ] && { escalate "$UNIT" "timed out after ${UNIT_TIMEOUT}s"; return 1; }
+
+  # A dead transcript is not a dead unit. The resume failed before the session started, so nothing
+  # was spent and nothing was decided -- escalating here would hand a human a worktree full of work
+  # and no way to continue it but by hand. The same worktree, the session's own prompt, and a new id.
+  if [ -n "$RESUME_ID" ] && [ -n "$fresh_prompt" ] && resume_failed "$rc" "$json_file"; then
+    warn "$UNIT: session $RESUME_ID could not be resumed; starting a fresh session on its work in $wt"
+    RESUME_ID=""
+    mint_session_id
+    # Rewritten, not appended to: the record names one conversation, and after this line it has to
+    # name the new one -- a second interruption resumes what actually ran.
+    write_session_record "$label"
+    run_claude "$wt" "$(fallback_prompt "$fresh_prompt")" "$json_file" "$LOOP_MODEL"
+    rc=$?
+    [ "$rc" = 124 ] && { escalate "$UNIT" "timed out after ${UNIT_TIMEOUT}s"; return 1; }
+  fi
   return 0
 }
 
@@ -743,11 +1417,13 @@ run_session() {
 # About the sandbox mounts:
 #   - The worktree is mounted at its own host path, not at /repo, because a gate that runs
 #     `docker compose` has its bind mounts resolved by the host daemon through the socket.
-#   - The main repository's .git is mounted because a linked worktree's `.git` is a file pointing
-#     into it by absolute path. The socket already grants host root, so this widens nothing that
-#     matters; what the sandbox bounds is lateral reach: ~/.ssh, the host home, other repositories,
-#     the gh login.
-#   - The state dir is mounted because the sentinel lives outside the worktree.
+#   - The repository's common .git is mounted because a linked worktree's `.git` is a file pointing
+#     into it by absolute path -- whether the worktree is one the loop created or the one it was
+#     driven from. The socket already grants host root, so this widens nothing that matters; what
+#     the sandbox bounds is lateral reach: ~/.ssh, the host home, other repositories, the gh login.
+#   - The unit's directory is mounted, and only it, because the sentinel lives outside the worktree
+#     and two units building at once must not read each other's. Its claude-config/ is the CLI's
+#     config dir inside the container, so the transcript a `--resume` needs outlives the container.
 #   - It runs as the invoking uid so the worktree stays owned by the human who reviews it.
 #
 # The container has no ssh keys, so git must speak https. An ssh remote is rewritten to
@@ -783,12 +1459,26 @@ run_claude_sandboxed() {
   local wt="$1" prompt="$2" json_file="$3" model="$4" rc=0
   load_sandbox_git_env
 
-  "$TIMEOUT_BIN" "$UNIT_TIMEOUT" docker run --rm -i \
+  # Docker refuses to start while the cid file is there, and `--rm` never deletes it -- so without
+  # this the launch after a kill, the one this whole design exists for, fails before a token is
+  # spent. Everything that reads the cid (the resume decision, the teardown) has read it by here.
+  rm -f "$UNIT_DIR/cid"
+
+  # Named, init'd and writing its id, so a container that outlives the loop can be found and killed:
+  # `docker ps --filter name=delivery-loop-` for a human, the cid file for the teardown. `--init`
+  # reaps the CLI's own children when the container is killed. The name carries the timestamp, the
+  # pid and a per-run container ordinal: a re-run of a paused unit can start inside the same second
+  # as the run it continues, and the PR-opening launch shares the last closing session's number.
+  CONTAINER_N=$((CONTAINER_N + 1))
+  "$TIMEOUT_BIN" "$UNIT_TIMEOUT" docker run --rm -i --init \
+    --name "delivery-loop-$BRANCH-${RUN_ID#*-}-${RUN_ID%%-*}-$(printf '%02d' "$CONTAINER_N")" \
+    --cidfile "$UNIT_DIR/cid" \
     -u "$(id -u):$(id -g)" \
     ${LOOP_SOCK_GID:+--group-add "$LOOP_SOCK_GID"} \
     -v "$wt:$wt" \
-    -v "$ROOT/.git:$ROOT/.git" \
-    -v "$STATE_DIR:$STATE_DIR" \
+    -v "$GIT_COMMON:$GIT_COMMON" \
+    -v "$UNIT_DIR:$UNIT_DIR" \
+    -v "$UNIT_DIR/claude-config:/loop-config" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -w "$wt" \
     -e CLAUDE_CODE_OAUTH_TOKEN -e ANTHROPIC_API_KEY -e GH_TOKEN \
@@ -796,6 +1486,8 @@ run_claude_sandboxed() {
     "$LOOP_IMAGE" \
       -p "$prompt" \
       --model "$model" \
+      ${SESSION_ID:+--session-id "$SESSION_ID"} \
+      ${RESUME_ID:+--resume "$RESUME_ID"} \
       --output-format json \
       --permission-mode bypassPermissions \
       --disallowedTools "${LOOP_DENIALS[@]}" > "$json_file" 2>"$json_file.err" || rc=$?
@@ -863,7 +1555,7 @@ sandbox_sees_repo() {
   docker run --rm \
     -u "$(id -u):$(id -g)" \
     -v "$wt:$wt" \
-    -v "$ROOT/.git:$ROOT/.git" \
+    -v "$GIT_COMMON:$GIT_COMMON" \
     -w "$wt" \
     --entrypoint git \
     "$LOOP_IMAGE" rev-parse --git-dir >/dev/null 2>&1
@@ -879,6 +1571,8 @@ run_claude() {
 
   ( cd "$wt" && "$TIMEOUT_BIN" "$UNIT_TIMEOUT" "$CLAUDE_BIN" -p "$prompt" \
       --model "$model" \
+      ${SESSION_ID:+--session-id "$SESSION_ID"} \
+      ${RESUME_ID:+--resume "$RESUME_ID"} \
       --output-format json \
       --permission-mode bypassPermissions \
       --disallowedTools "${LOOP_DENIALS[@]}" ) > "$json_file" 2>"$json_file.err" || rc=$?
@@ -906,10 +1600,16 @@ hit_usage_limit() {
 # `kind` is `phase` with the phase label, or `closing` with the step name. A phase session and the
 # docs and review steps hand over with CONTINUE; only the archive step may write OK.
 #
+# The sentinel decides whether the record survives. A session that wrote one reported on itself: it
+# either finished its work or is finished and wrong, and in both cases there is no conversation
+# worth resuming, so the record goes. A session that wrote none was interrupted -- the usage limit,
+# a signal, a kill, a timeout, a denied `Write` -- and its half-built work is in the worktree with
+# nothing but the record to name it, so the record stays. `is_error` counts as interrupted.
+#
 # Returns 0 for a verified OK, 2 for a verified CONTINUE, 3 for a usage-limit pause, 1 otherwise.
 verify_session() {
   local kind="$1" name="$2" json_file="$3"
-  local status_file="$STATE_DIR/$BRANCH.status"
+  local status_file="$UNIT_DIR/status"
   local sentinel tip handover=0
 
   # A session refused for the usage limit wrote no sentinel and did no work; neither is a finding
@@ -923,6 +1623,7 @@ verify_session() {
   if [ -s "$json_file" ] \
      && [ "$(jq -r '(.permission_denials // []) | length' "$json_file" 2>/dev/null)" != "0" ]; then
     escalate "$UNIT" "permission denials: $(jq -c '[.permission_denials[].tool_name] | unique' "$json_file" 2>/dev/null)"
+    [ ! -f "$status_file" ] || drop_record
     return 1
   fi
 
@@ -933,7 +1634,7 @@ verify_session() {
   sentinel="$(cat "$status_file")"
 
   case "$sentinel" in
-    ESCALATE:*) escalate "$UNIT" "${sentinel#ESCALATE:}"; return 1 ;;
+    ESCALATE:*) escalate "$UNIT" "${sentinel#ESCALATE:}"; drop_record; return 1 ;;
   esac
 
   # A handover is checked as hard as a completion: same tip, same run. A CONTINUE that did not push
@@ -948,6 +1649,10 @@ verify_session() {
       return 1
     fi
   fi
+
+  # Past here the session both reported itself and was not cut off, so every outcome below is one it
+  # owns. The one conversation the loop could have resumed is over.
+  drop_record
 
   tip="$(git ls-remote --heads origin "$BRANCH" 2>/dev/null | awk '{ print $1 }')"
   if [ -z "$tip" ]; then
@@ -1008,7 +1713,7 @@ prove_unit() {
   local attempt
   for attempt in 1 2; do
     log "$UNIT: proving with LOOP_GATES on the host (attempt $attempt)"
-    if run_gates "$WORKTREES/$BRANCH"; then
+    if run_gates "$UNIT_WT"; then
       return 0
     fi
     [ "$attempt" = 1 ] || break
@@ -1114,7 +1819,7 @@ record_telemetry() {
 # Idempotent: a restarted run leaves the ledger ticked exactly once.
 record_unit() {
   local pr_number="$1"
-  local wt="$WORKTREES/$BRANCH"
+  local wt="$UNIT_WT"
   local measured line spec_in_wt
 
   if unit_is_recorded; then
@@ -1123,8 +1828,9 @@ record_unit() {
   fi
 
   # The loop can crash between /open-pr and this commit, leaving an open PR whose unit is unticked
-  # and whose worktree is gone. The tick belongs on the unit's branch, so check it out again.
-  if [ ! -d "$wt" ]; then
+  # and whose worktree is gone. The tick belongs on the unit's branch, so check it out again. In
+  # place the worktree is the driver and is always there.
+  if [ "$IN_PLACE" = 0 ] && [ ! -d "$wt" ]; then
     log "$UNIT: no worktree; checking $BRANCH out to record the tick"
     checkout_worktree "$wt" "$BRANCH" >/dev/null 2>&1 \
       || { escalate "$UNIT" "ledger is unticked and $BRANCH cannot be checked out; tick it by hand"; return 1; }
@@ -1169,6 +1875,11 @@ print_plan() {
     return 0
   fi
   log "unit:   $UNIT on $BRANCH, from origin/main, one PR at the end"
+  if [ "$IN_PLACE" = 1 ]; then
+    log "tree:   $UNIT_WT — this worktree, built in place and never reclaimed"
+  else
+    log "tree:   $UNIT_WT — created for the unit, reclaimed when it is done"
+  fi
   log "state:  $(probe_run "$BRANCH")"
   log "phases: $PHASE_COUNT, one session each, then 3 closing sessions: docs, review, archive (MAX_SESSIONS=$MAX_SESSIONS)"
   while IFS='|' read -r done_flag phase title; do
@@ -1198,6 +1909,11 @@ if [ "$DRY_RUN" = 1 ]; then
   fi
   log "timeout: $TIMEOUT_BIN"
   print_plan
+  # What the next run would do with what the last one left, said before it is done. A paused unit's
+  # kept worktree and its record are invisible from the outside, so a dry run that reported the plan
+  # and not the resume would describe a run that starts at phase one when it would in fact continue
+  # a session. Report-only: this reads and changes nothing.
+  [ -z "$BRANCH" ] || resume_decision --report
   rm -f "$LEDGER" "$PHASES" "$PHASES.err"
   exit 0
 fi
@@ -1207,10 +1923,13 @@ if [ -z "$BRANCH" ]; then
   exit 0
 fi
 
-if ! acquire_lock; then
+if ! acquire_lock "$BRANCH"; then
   exit 3
 fi
-trap teardown EXIT INT TERM
+# HUP is not optional for an overnight run. It arrives when the SSH session that started the loop
+# drops, and without it the trap never fires: the lock stays held and the session container keeps
+# running with the worktree mounted.
+trap teardown EXIT INT TERM HUP
 
 git fetch origin --quiet || warn "git fetch failed; working from the refs already here"
 
@@ -1238,8 +1957,24 @@ esac
 # The base is where this unit started: the merge-base with main once the branch exists, main itself
 # before that. A resumed run must not take the branch tip, or every gate and the closing review would
 # see only the phases built in this invocation. Pinned to a sha so a moving main does not move it.
-UNIT_BASE="$(git merge-base origin/main "origin/$BRANCH" 2>/dev/null \
-  || git rev-parse origin/main)"
+#
+# In place the branch may not be on origin yet -- the spec's own commits are the only ones it has,
+# and the first session's push is what creates it -- so the merge base is taken against HEAD, which
+# is that branch. It is the same commit either way once the push has happened.
+if [ "$IN_PLACE" = 1 ]; then
+  UNIT_BASE="$(git merge-base origin/main HEAD 2>/dev/null || git rev-parse origin/main)"
+else
+  UNIT_BASE="$(git merge-base origin/main "origin/$BRANCH" 2>/dev/null || git rev-parse origin/main)"
+fi
+
+# What the last run left, read before this one starts anything. After the PR probe -- a merged or
+# closed PR is a fact about the whole unit and outranks any question about one interrupted session
+# -- and before the first session, because its answer decides which prompt that session gets. It
+# either sets RESUME_ID, drops a record that no longer describes anything, or escalates because the
+# worktree may still have a writer.
+if ! resume_decision; then
+  exit 4
+fi
 
 # One phase per session, as many sessions as there are phases, then one per closing step. The gates
 # run in every session on that session's work; `prove_unit` runs them once more on the host when the
@@ -1253,40 +1988,66 @@ while :; do
     break
   fi
   SESSIONS=$((SESSIONS + 1))
-  STATUS_FILE="$STATE_DIR/$BRANCH.status"
+  STATUS_FILE="$UNIT_DIR/status"
   # Epoch, then pid, then the session number: a lexical glob is chronological across runs, and two
-  # runs started within the same second cannot overwrite each other's sessions.
+  # runs started within the same second cannot overwrite each other's sessions -- a re-run after a
+  # pause no longer waits for a worktree to be created and can start inside the same second.
   JSON_FILE="$STATE_DIR/$BRANCH.s${RUN_ID#*-}-$$-$(printf '%02d' "$SESSIONS").json"
   rm -f "$STATUS_FILE"
+
+  # A resumed session is tagged in the telemetry rather than bounded: it starts near the context its
+  # interrupted half reached, and that row is a reading like every other. Captured here because
+  # RESUME_ID is cleared the moment the session it belongs to has been launched.
+  RESUMED=""
+  [ -z "$RESUME_ID" ] || RESUMED=" (resumed)"
 
   NEXT="$(next_phase)"
   if [ -n "$NEXT" ]; then
     PHASE="${NEXT%%|*}"
     TITLE="${NEXT#*|}"
-    log "$UNIT: session $SESSIONS builds $PHASE — $TITLE"
-    run_session "$(phase_prompt "$SPEC" "$UNIT" "$BRANCH" "$PHASE" "$TITLE" "$STATUS_FILE")" "$JSON_FILE" || break
+    FRESH="$(phase_prompt "$SPEC" "$UNIT" "$BRANCH" "$PHASE" "$TITLE" "$STATUS_FILE")"
+    if [ -n "$RESUME_ID" ]; then
+      log "$UNIT: session $SESSIONS continues the interrupted $PHASE — $TITLE"
+      run_session "$(continuation_prompt "$SPEC" "$UNIT" "$BRANCH" "$PHASE" "$TITLE" "$STATUS_FILE")" \
+                  "$JSON_FILE" "$PHASE" "$FRESH" || break
+    else
+      log "$UNIT: session $SESSIONS builds $PHASE — $TITLE"
+      run_session "$FRESH" "$JSON_FILE" "$PHASE" || break
+    fi
   elif unit_is_ticked; then
     SESSIONS=$((SESSIONS - 1))
     log "$UNIT: every phase is ticked and the ledger is ticked on $BRANCH; the unit is closed"
-    if [ ! -d "$WORKTREES/$BRANCH" ]; then
-      checkout_worktree "$WORKTREES/$BRANCH" "$BRANCH" >/dev/null 2>&1 \
-        || { escalate "$UNIT" "could not check out $BRANCH to prove and record it"; break; }
-      cp_settings "$WORKTREES/$BRANCH"
+    if [ "$IN_PLACE" = 0 ]; then
+      if [ ! -d "$UNIT_WT" ]; then
+        checkout_worktree "$UNIT_WT" "$BRANCH" >/dev/null 2>&1 \
+          || { escalate "$UNIT" "could not check out $BRANCH to prove and record it"; break; }
+        cp_settings "$UNIT_WT"
+      fi
+      CURRENT_WT="$UNIT_WT"
     fi
-    CURRENT_WT="$WORKTREES/$BRANCH"
     UNIT_OK=1
     break
   else
     PHASE=""
     STEP="$(next_closing_step)"
-    log "$UNIT: session $SESSIONS runs the closing step '$STEP'"
-    run_session "$(closing_prompt "$SPEC" "$UNIT" "$BRANCH" "$STEP" "$STATUS_FILE")" "$JSON_FILE" || break
+    FRESH="$(closing_prompt "$SPEC" "$UNIT" "$BRANCH" "$STEP" "$STATUS_FILE")"
+    if [ -n "$RESUME_ID" ]; then
+      log "$UNIT: session $SESSIONS continues the interrupted closing step '$STEP'"
+      run_session "$(continuation_prompt "$SPEC" "$UNIT" "$BRANCH" "" "" "$STATUS_FILE" "$STEP")" \
+                  "$JSON_FILE" "closing:$STEP" "$FRESH" || break
+    else
+      log "$UNIT: session $SESSIONS runs the closing step '$STEP'"
+      run_session "$FRESH" "$JSON_FILE" "closing:$STEP" || break
+    fi
   fi
+  # One session is resumed, not the run. Whatever the continuation reported, the conversation it
+  # continued has now had its say; the next session is a fresh one on the next phase.
+  RESUME_ID=""
   # The phase or step is stamped into the session's JSON so the telemetry can name it. The latest
   # session is also kept under the plain branch name, which is where a human reads it after an
   # escalation.
   LABEL="${PHASE:-closing:$STEP}"
-  if [ -s "$JSON_FILE" ] && jq --arg p "$LABEL" '. + {loop_phase: $p}' "$JSON_FILE" > "$JSON_FILE.tmp" 2>/dev/null; then
+  if [ -s "$JSON_FILE" ] && jq --arg p "$LABEL$RESUMED" '. + {loop_phase: $p}' "$JSON_FILE" > "$JSON_FILE.tmp" 2>/dev/null; then
     mv "$JSON_FILE.tmp" "$JSON_FILE"
   fi
   rm -f "$JSON_FILE.tmp"
@@ -1315,11 +2076,18 @@ while :; do
 done
 
 if [ "$UNIT_OK" = 1 ] && prove_unit; then
+  # Nothing below this line is a continuation of anything. The unit reached here either through the
+  # archive step or through the short-circuit that finds its ledger already ticked -- and on that
+  # second path no session ran, so a RESUME_ID set for one would still be standing.
+  RESUME_ID=""
   # One PR for the whole unit, opened once and attested on origin: a session can exit 0 having
   # opened nothing.
   if [ "$(probe_run "$BRANCH")" = "NONE" ]; then
     log "opening the PR for $UNIT on $BRANCH"
-    run_claude "$WORKTREES/$BRANCH" \
+    # An id of its own, and no record: nothing about a session that reads a diff and fills in a
+    # template is worth resuming, and reusing the last session's id would have the CLI refuse.
+    mint_session_id
+    run_claude "$UNIT_WT" \
       "Run /open-pr with --base main. This branch carries the whole delivery unit $UNIT of $SPEC, one
 commit per phase. Title it: <type>(<scope>): <the feature>. Do not list the phases in the title." \
       "$STATE_DIR/$BRANCH.pr.json" "$PR_MODEL" || escalate "$UNIT" "/open-pr failed"
@@ -1335,18 +2103,33 @@ commit per phase. Title it: <type>(<scope>): <the feature>. Do not list the phas
   # Recorded after the PR so the tick carries its number. The tick is what a later run reads to
   # know the unit is delivered, so it is written even when the PR step escalated.
   record_unit "$PR_NUMBER" || true
-fi
 
-if [ -n "$CURRENT_WT" ] && [ -d "$CURRENT_WT" ]; then
-  "$LOOP_DIR/reclaim-worktree.sh" "$CURRENT_WT" || warn "reclaim of $CURRENT_WT did not complete"
-  CURRENT_WT=""
+  # The only reclaim. The unit is proved, its PR is open and its tick is recorded, so nothing in the
+  # worktree is owed to anyone. Every other way out of this script keeps it: that is the difference
+  # between a run that finished and a run that stopped.
+  #
+  # Never in place. There the worktree is the driver -- the human's own tree, the branch's only
+  # checkout, and the directory this process is running in. CURRENT_WT is never set on that path;
+  # IN_PLACE is asserted beside it because this is the one line whose mistake is unrecoverable.
+  drop_record
+  if [ "$IN_PLACE" = 0 ] && [ -n "$CURRENT_WT" ] && [ -d "$CURRENT_WT" ]; then
+    "$LOOP_DIR/reclaim-worktree.sh" "$CURRENT_WT" || warn "reclaim of $CURRENT_WT did not complete"
+    CURRENT_WT=""
+  fi
 fi
 
 log "$SESSIONS session(s) this run"
+
+# A stop leaves a worktree behind, and a worktree nobody knows about is the disk disappearing for
+# no stated reason. Said on the way out, with the phase the record names and the command that drops
+# it, so keeping it is a choice rather than an accident.
+KEPT_NOTE="$(kept_worktree_note)"
+[ -z "$KEPT_NOTE" ] || log "$KEPT_NOTE"
+
 if [ "$PAUSED" = 1 ]; then
   log "paused: the usage limit is reached. Re-run the same command once it resets; the loop continues"
-  log "from the first unticked phase on $BRANCH."
-  attention "delivery-loop: paused on the usage limit — re-run to continue $UNIT"
+  log "the refused session on $BRANCH, in the worktree it left."
+  attention "delivery-loop: paused on the usage limit — re-run to continue $UNIT${KEPT_NOTE:+; $KEPT_NOTE}"
   exit 5
 fi
 [ "$ESCALATED" = 0 ] || exit 4
