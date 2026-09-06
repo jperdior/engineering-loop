@@ -67,6 +67,21 @@ PHP
   # A file the classifier must ignore entirely: shell comments are carved out of the convention.
   printf '# a comment\n# another\ncode\n' > "$repo/deep/sub/dir/thing.sh"
 
+  # The classifier is language-agnostic: the same rules on TypeScript, Python and Go. One prose
+  # comment in each implementation file; the imports, signatures and bodies are code.
+  mkdir -p "$repo/apps/web/src" "$repo/services/api" "$repo/cmd/tool"
+  cat > "$repo/apps/web/src/widget.ts" <<'TS'
+// The widget owns its own state.
+import { useState } from "react";
+export function widget(a: string): string {
+  return a;
+}
+TS
+  printf 'import { widget } from "./widget";\ntest("x", () => widget("a"));\n' > "$repo/apps/web/src/widget.test.ts"
+  printf '# Handles the request end to end.\ndef handle(req):\n    return req\n' > "$repo/services/api/handler.py"
+  printf '// Package main is the entry point.\npackage main\nfunc main() {}\n' > "$repo/cmd/tool/main.go"
+  printf 'package main\nfunc TestMain(t *testing.T) {}\n' > "$repo/cmd/tool/main_test.go"
+
   # 6 test lines. Implementation and tests are reported apart, because a reviewer follows one line
   # by line and reads the other for coverage.
   mkdir -p "$repo/apps/api/tests/Unit"
@@ -93,11 +108,15 @@ check() {
 
 fixture
 
-# lines: 3 (.ai/lessons.md) + 2 (AGENTS.md) + 10 (Thing.php) + 3 (thing.sh) + 6 (ThingTest.php) = 24
-# files: lessons.md, AGENTS.md, Thing.php, thing.sh, ThingTest.php = 5
+# lines: 3 (.ai/lessons.md) + 2 (AGENTS.md) + 10 (Thing.php) + 3 (thing.sh) + 6 (ThingTest.php)
+#        + 5 (widget.ts) + 2 (widget.test.ts) + 3 (handler.py) + 3 (main.go) + 2 (main_test.go) = 39
+# tests: 6 (ThingTest.php) + 2 (widget.test.ts) + 2 (main_test.go) = 10
+# files: lessons.md, AGENTS.md, Thing.php, thing.sh, ThingTest.php, widget.ts, widget.test.ts,
+#        handler.py, main.go, main_test.go = 10
 # ctx:   4 (.ai/specs) + 3 (.ai/lessons.md) + 2 (AGENTS.md) = 9
-# comments: 2 prose over 16 added PHP lines (10 in Thing.php + 6 in ThingTest.php) = 12%.
-EXPECTED="24 lines (18 impl + 6 test), 5 files, 12% comments, 9 ctx"
+# comments: 5 prose (2 PHP, 1 TS, 1 Python, 1 Go) over 31 added lines in scope
+#           (16 PHP + 7 TS + 3 Python + 5 Go) = 16%. The shell file is out of scope.
+EXPECTED="39 lines (29 impl + 10 test), 10 files, 16% comments, 9 ctx"
 
 # The host names its own generated paths; the lockfiles, `*.gen.*` and the spec are excluded by default.
 HOST_EXCLUDES="apps/api/openapi.json apps/web/messages/*.json"
@@ -124,11 +143,11 @@ else
 fi
 
 ratio="$(cd "$TMP/repo" && ./.loop/comment-ratio.sh base-ref)"
-if [ "$ratio" != "12" ]; then
-  printf 'FAIL %-46s got %s, wanted 12\n' "comment-ratio counts prose, not type info" "$ratio" >&2
+if [ "$ratio" != "16" ]; then
+  printf 'FAIL %-46s got %s, wanted 16\n' "comment-ratio counts prose in every language" "$ratio" >&2
   failures=$((failures + 1))
 else
-  printf 'ok   comment-ratio counts prose, not type info\n'
+  printf 'ok   comment-ratio counts prose in every language, not type info\n'
 fi
 
 if [ "$failures" -ne 0 ]; then

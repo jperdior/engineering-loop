@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Build a spec's delivery unit unattended: one fresh `claude -p` per spec phase, on one branch, then
-# one closing session for the review, then one PR. The loop never merges; a human merges the PR.
+# three closing sessions (context docs, code review, archive), then one PR. The loop never merges; a
+# human merges the PR.
 #
 # Usage:
 #   delivery-loop.sh <spec-file> [--dry-run] [--force-unlock]
@@ -15,7 +16,7 @@
 #
 #   LOOP_GATES="make lint;make test"  the host's gates, run from the repo root in this order.
 #   LOOP_MODEL=opus                   the model of every build session; the PR session runs on sonnet.
-#   MAX_SESSIONS=<phases>+2           sessions per invocation before the unit is declared non-converging.
+#   MAX_SESSIONS=<phases>+4           sessions per invocation before the unit is declared non-converging.
 #   UNIT_TIMEOUT=7200                 seconds per session, enforced by timeout(1).
 #   SESSION_CONTEXT_ALARM=150000      a session whose peak context exceeds this is reported, not stopped.
 #
@@ -151,6 +152,21 @@ UNIT=""
 BRANCH=""
 UNIT_BASE=""
 PHASE_COUNT=0
+
+# Once every phase is ticked, the unit is closed by these steps, in this order, each in its own
+# session: the context docs, the whole-branch code review with its fix wave, the ledger tick and
+# archive. Only the archive step leaves proof on the branch (the ticked ledger line), so a run that
+# resumes with all phases ticked and the ledger unticked runs the three steps again. The docs sync
+# and the review are idempotent, and a repeat costs one crash, not a marker the spec grammar lacks.
+CLOSING_STEPS="docs review archive"
+CLOSING_DONE=""
+
+next_closing_step() {
+  local s
+  for s in $CLOSING_STEPS; do
+    case " $CLOSING_DONE " in *" $s "*) ;; *) printf '%s' "$s"; return 0 ;; esac
+  done
+}
 
 log()  { printf 'delivery-loop: %s\n' "$*"; }
 warn() { printf 'delivery-loop: %s\n' "$*" >&2; }
@@ -386,7 +402,8 @@ preflight() {
       return 1
     fi
     PHASE_COUNT="$(wc -l < "$PHASES" | tr -d ' ')"
-    [ -n "$MAX_SESSIONS" ] || MAX_SESSIONS=$((PHASE_COUNT + 2))
+    # One per phase, one per closing step, one spare.
+    [ -n "$MAX_SESSIONS" ] || MAX_SESSIONS=$((PHASE_COUNT + 4))
   fi
   return 0
 }
@@ -590,36 +607,65 @@ missing file is treated as an escalation.
 PROMPT
 }
 
-final_prompt() {
-  local spec="$1" unit="$2" branch="$3" status_file="$4"
+# The three closing steps share one prompt shape; the step's own instructions and its sentinel word
+# differ. docs and review hand over with CONTINUE; archive finishes with OK.
+closing_step_block() {
+  case "$1" in
+    docs) cat <<BLOCK
+Your step: the context docs. Run /sync-context-docs against $UNIT_BASE so the AGENTS.md / CLAUDE.md
+nearest to every directory this unit touched describes the code as it now is. Commit and push
+anything it changes. If nothing needed changing, push nothing: the branch tip is still what you
+report.
+BLOCK
+    ;;
+    review) cat <<BLOCK
+Your step: the code review. The docs are already synced. Run /code-review over
+  git diff \$(git merge-base "$UNIT_BASE" HEAD)...HEAD
+with the reviewers on opus. Resolve every Critical and High finding in one fix wave; commit and
+push it. Then /run-gates $UNIT_BASE in the foreground until every in-scope gate is green, and one
+scoped re-review of the fix diff; commit and push. A finding you cannot resolve without a human is
+an ESCALATE, not a note in the PR.
+BLOCK
+    ;;
+    archive) cat <<BLOCK
+Your step: the ledger. The docs are synced and the review is resolved. Run /archive-spec $SPEC: it
+ticks this unit's line under ## Delivery and moves the spec to its implemented/ directory. Commit
+and push.
+BLOCK
+    ;;
+  esac
+}
+
+closing_prompt() {
+  local spec="$1" unit="$2" branch="$3" step="$4" status_file="$5"
+  local word="CONTINUE" meaning="this step is done and pushed; the next step runs in a fresh session"
+  if [ "$step" = archive ]; then
+    word="OK"
+    meaning="the unit is reviewed, ticked and pushed"
+  fi
   cat <<PROMPT
-Every phase of an approved spec is built and ticked on this branch. You close the unit out,
-unattended: review it, tick its ledger, and stop before the PR.
+Every phase of an approved spec is built and ticked on this branch. The unit is closed in three
+steps, each in its own session; you run exactly one of them, unattended, and stop before the PR.
 
 This is a headless session. The moment you end your turn the process exits, this worktree is
 removed, and anything not pushed is gone. So nothing runs in the background -- run gates and
-reviewers in the foreground and wait for them -- and every step below ends with a commit and a
-push before the next one starts.
+reviewers in the foreground and wait for them -- and commit and push before you write the sentinel.
 
 Spec:   $spec
 Unit:   $unit - branch $branch
+Step:   $step
 Base:   all diffs, gates and reviews for this unit are against $UNIT_BASE, never main.
 
-In this order:
-  1. /sync-context-docs against $UNIT_BASE; commit and push anything it changes.
-  2. /code-review over  git diff \$(git merge-base "$UNIT_BASE" HEAD)...HEAD  -- the reviewers run on
-     opus. Resolve every Critical and High finding in one fix wave; commit and push it. Then
-     /run-gates $UNIT_BASE in the foreground until every in-scope gate is green, and one scoped
-     re-review; commit and push.
-     A finding you cannot resolve without a human is an ESCALATE, not a note in the PR.
-  3. /archive-spec $spec -- it ticks this unit's ledger line and archives the spec. Commit and push.
-  4. Do NOT open a pull request: the run opens it once it has re-run the gates itself.
+$(closing_step_block "$step")
+
+Do NOT open a pull request: the run opens it once it has re-run the gates itself. Do not run the
+other closing steps; each has its own session.
 
 The last thing you do, after the final push, is write exactly one line to this file
   $status_file
 That line is one of:
-  OK $branch <the sha you pushed> $RUN_ID
-                              the unit is reviewed, ticked and pushed
+  $word $branch <the sha you pushed> $RUN_ID
+                              $meaning
   ESCALATE:<one-line reason>  for anything else.
 Never leave it unwritten. A missing file is treated as an escalation.
 PROMPT
@@ -637,8 +683,9 @@ cp_settings() {
 
 # One session. The worktree is continued when it exists, checked out when the branch exists on
 # origin, and created from origin/main otherwise. A branch on origin is always the work of earlier
-# sessions and is never rebuilt. A local branch that never reached origin is a session that failed
-# before its first push; it is dropped and the phase starts over.
+# sessions and is never rebuilt. A local branch that never reached origin is dropped only when it
+# holds nothing beyond origin/main, which is what a session that never committed leaves behind; one
+# that carries commits may be someone's work, so the loop stops and asks rather than deleting it.
 run_session() {
   local prompt="$1" json_file="$2"
   local wt="$WORKTREES/$BRANCH" rc
@@ -650,7 +697,13 @@ run_session() {
     CURRENT_WT="$wt"
     cp_settings "$wt"
   else
-    git branch -D "$BRANCH" >/dev/null 2>&1 || true
+    if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
+      if [ "$(git rev-list --count "origin/main..$BRANCH" 2>/dev/null || echo 1)" != 0 ]; then
+        escalate "$UNIT" "a local branch $BRANCH carries commits that never reached origin; push it or delete it by hand"
+        return 1
+      fi
+      git branch -D "$BRANCH" >/dev/null 2>&1 || true
+    fi
     log "$UNIT: worktree $wt on $BRANCH from origin/main"
     if ! git worktree add -b "$BRANCH" "$wt" origin/main; then
       escalate "$UNIT" "git worktree add failed; not running claude into a directory that is not there"
@@ -850,9 +903,12 @@ hit_usage_limit() {
 # done nothing. A hard API error reports is_error true alongside subtype "success". So subtype is
 # never consulted: is_error, permission_denials and the sentinel are.
 #
+# `kind` is `phase` with the phase label, or `closing` with the step name. A phase session and the
+# docs and review steps hand over with CONTINUE; only the archive step may write OK.
+#
 # Returns 0 for a verified OK, 2 for a verified CONTINUE, 3 for a usage-limit pause, 1 otherwise.
 verify_session() {
-  local expected_phase="$1" json_file="$2"
+  local kind="$1" name="$2" json_file="$3"
   local status_file="$STATE_DIR/$BRANCH.status"
   local sentinel tip handover=0
 
@@ -909,26 +965,35 @@ verify_session() {
   fi
 
   # The tick is the proof of progress. A phase session says CONTINUE; whether it finished is read
-  # from the checklist on origin, not from its say-so. A closing session says OK; every phase must
-  # be ticked. The wrong sentinel for the session's kind is an escalation too.
+  # from the checklist on origin, not from its say-so. A closing step runs with every phase ticked,
+  # and the archive step's OK is read from the ledger line, not from its say-so either. The wrong
+  # sentinel for the session's kind is an escalation.
   if ! refresh_phases; then
     escalate "$UNIT" "the ## Progress checklist on origin/$BRANCH no longer parses: $(head -1 "$PHASES.err")"
     return 1
   fi
-  if [ "$handover" = 1 ]; then
-    [ -n "$expected_phase" ] || { escalate "$UNIT" "the closing session handed over instead of finishing"; return 1; }
-    if ! phase_is_ticked "$expected_phase"; then
-      escalate "$UNIT" "the session handed over without ticking $expected_phase in ## Progress"
+  if [ "$kind" = phase ]; then
+    [ "$handover" = 1 ] || { escalate "$UNIT" "a phase session wrote OK; only the closing archive step may"; return 1; }
+    if ! phase_is_ticked "$name"; then
+      escalate "$UNIT" "the session handed over without ticking $name in ## Progress"
       return 1
     fi
     return 2
   fi
-  [ -z "$expected_phase" ] || { escalate "$UNIT" "a phase session wrote OK; only the closing session may"; return 1; }
   if [ "$(unticked_phases)" != 0 ]; then
-    escalate "$UNIT" "OK was written with $(unticked_phases) phase(s) still unticked in ## Progress"
+    escalate "$UNIT" "the closing step '$name' ran with $(unticked_phases) phase(s) still unticked in ## Progress"
     return 1
   fi
-  return 0
+  if [ "$name" = archive ]; then
+    [ "$handover" = 0 ] || { escalate "$UNIT" "the closing session handed over instead of finishing"; return 1; }
+    if ! unit_is_ticked; then
+      escalate "$UNIT" "the archive step wrote OK but $UNIT is not ticked under ## Delivery on origin/$BRANCH"
+      return 1
+    fi
+    return 0
+  fi
+  [ "$handover" = 1 ] || { escalate "$UNIT" "the closing step '$name' wrote OK; only the archive step may"; return 1; }
+  return 2
 }
 
 # The sentinel is the model reporting on its own work. This is the first check the loop does not
@@ -1105,7 +1170,7 @@ print_plan() {
   fi
   log "unit:   $UNIT on $BRANCH, from origin/main, one PR at the end"
   log "state:  $(probe_run "$BRANCH")"
-  log "phases: $PHASE_COUNT, one session each, then a closing session (MAX_SESSIONS=$MAX_SESSIONS)"
+  log "phases: $PHASE_COUNT, one session each, then 3 closing sessions: docs, review, archive (MAX_SESSIONS=$MAX_SESSIONS)"
   while IFS='|' read -r done_flag phase title; do
     [ -n "$phase" ] || continue
     printf '  [%s] %s — %s\n' "$done_flag" "$phase" "$title"
@@ -1176,11 +1241,12 @@ esac
 UNIT_BASE="$(git merge-base origin/main "origin/$BRANCH" 2>/dev/null \
   || git rev-parse origin/main)"
 
-# One phase per session, as many sessions as there are phases, then one to close. The gates run in
-# every session on that session's phase; `prove_unit` runs them once more on the host when the
-# closing session says OK.
+# One phase per session, as many sessions as there are phases, then one per closing step. The gates
+# run in every session on that session's work; `prove_unit` runs them once more on the host when the
+# archive step says OK.
 SESSIONS=0
 UNIT_OK=0
+STEP=""
 while :; do
   if [ "$SESSIONS" -ge "$MAX_SESSIONS" ]; then
     escalate "$UNIT" "still not finished after $SESSIONS sessions (MAX_SESSIONS=$MAX_SESSIONS); it is not converging"
@@ -1212,23 +1278,37 @@ while :; do
     break
   else
     PHASE=""
-    log "$UNIT: session $SESSIONS closes the unit: review, ledger tick, archive"
-    run_session "$(final_prompt "$SPEC" "$UNIT" "$BRANCH" "$STATUS_FILE")" "$JSON_FILE" || break
+    STEP="$(next_closing_step)"
+    log "$UNIT: session $SESSIONS runs the closing step '$STEP'"
+    run_session "$(closing_prompt "$SPEC" "$UNIT" "$BRANCH" "$STEP" "$STATUS_FILE")" "$JSON_FILE" || break
   fi
-  # The phase is stamped into the session's JSON so the telemetry can name it. The latest session is
-  # also kept under the plain branch name, which is where a human reads it after an escalation.
-  if [ -s "$JSON_FILE" ] && jq --arg p "${PHASE:-closing}" '. + {loop_phase: $p}' "$JSON_FILE" > "$JSON_FILE.tmp" 2>/dev/null; then
+  # The phase or step is stamped into the session's JSON so the telemetry can name it. The latest
+  # session is also kept under the plain branch name, which is where a human reads it after an
+  # escalation.
+  LABEL="${PHASE:-closing:$STEP}"
+  if [ -s "$JSON_FILE" ] && jq --arg p "$LABEL" '. + {loop_phase: $p}' "$JSON_FILE" > "$JSON_FILE.tmp" 2>/dev/null; then
     mv "$JSON_FILE.tmp" "$JSON_FILE"
   fi
   rm -f "$JSON_FILE.tmp"
   cp "$JSON_FILE" "$STATE_DIR/$BRANCH.json" 2>/dev/null || true
-  context_alarm "$JSON_FILE" "${PHASE:-closing session}"
+  context_alarm "$JSON_FILE" "$LABEL"
 
   VERDICT=0
-  verify_session "$PHASE" "$JSON_FILE" || VERDICT=$?
+  if [ -n "$PHASE" ]; then
+    verify_session phase "$PHASE" "$JSON_FILE" || VERDICT=$?
+  else
+    verify_session closing "$STEP" "$JSON_FILE" || VERDICT=$?
+  fi
   case "$VERDICT" in
     0) UNIT_OK=1; break ;;
-    2) log "$UNIT: $PHASE is ticked and pushed; continuing in a fresh session" ;;
+    2)
+      if [ -n "$PHASE" ]; then
+        log "$UNIT: $PHASE is ticked and pushed; continuing in a fresh session"
+      else
+        CLOSING_DONE="$CLOSING_DONE $STEP"
+        log "$UNIT: closing step '$STEP' is done and pushed; continuing in a fresh session"
+      fi
+      ;;
     3) PAUSED=1; break ;;
     *) break ;;
   esac
@@ -1243,11 +1323,13 @@ if [ "$UNIT_OK" = 1 ] && prove_unit; then
       "Run /open-pr with --base main. This branch carries the whole delivery unit $UNIT of $SPEC, one
 commit per phase. Title it: <type>(<scope>): <the feature>. Do not list the phases in the title." \
       "$STATE_DIR/$BRANCH.pr.json" "$PR_MODEL" || escalate "$UNIT" "/open-pr failed"
-    if [ "$(probe_run "$BRANCH")" = "NONE" ]; then
-      escalate "$UNIT" "the PR was reported open but origin has none for this branch; open it by hand"
-    else
-      PR_NUMBER="$(probe_run "$BRANCH" | awk '{ print $2 }')"
-    fi
+    # One probe answers both questions: is there a PR, and what is its number.
+    PR_STATE="$(probe_run "$BRANCH")"
+    case "$PR_STATE" in
+      OPEN\ *|MERGED\ *|CLOSED\ *) PR_NUMBER="${PR_STATE#* }" ;;
+      NONE)  escalate "$UNIT" "the PR was reported open but origin has none for this branch; open it by hand" ;;
+      *)     escalate "$UNIT" "gh could not be read after /open-pr; check whether the PR exists by hand" ;;
+    esac
   fi
 
   # Recorded after the PR so the tick carries its number. The tick is what a later run reads to

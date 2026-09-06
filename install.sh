@@ -52,12 +52,21 @@ mkdir -p "$HOST/.loop/sandbox"
 cp "$SRC/loop/sandbox/Dockerfile" "$SRC/loop/sandbox/build.sh" "$HOST/.loop/sandbox/"
 chmod +x "$HOST/.loop/"*.sh "$HOST/.loop/sandbox/build.sh"
 
+# When the skills come from the engineering-loop plugin, the symlinks would only duplicate them.
+SKILLS_VIA_PLUGIN=0
+if command -v claude >/dev/null 2>&1 && claude plugin list 2>/dev/null | grep -q 'engineering-loop@'; then
+  SKILLS_VIA_PLUGIN=1
+  echo "install: the engineering-loop plugin is installed; not symlinking the skills into .claude/skills/"
+fi
+
 for skill in "$SRC"/skills/*/; do
   name="$(basename "$skill")"
   rm -rf "$HOST/.loop/skills/$name"
   cp -R "$skill" "$HOST/.loop/skills/$name"
   # A symlink, so an update to .loop/ is an update to the skill Claude Code loads.
-  if [ -e "$HOST/.claude/skills/$name" ] && [ ! -L "$HOST/.claude/skills/$name" ]; then
+  if [ "$SKILLS_VIA_PLUGIN" = 1 ]; then
+    :
+  elif [ -e "$HOST/.claude/skills/$name" ] && [ ! -L "$HOST/.claude/skills/$name" ]; then
     echo "install: .claude/skills/$name exists and is not a symlink; leaving it. Remove it to use the engine's." >&2
   else
     ln -sfn "../../.loop/skills/$name" "$HOST/.claude/skills/$name"
@@ -75,15 +84,13 @@ done
 # claude CLI is here and it is not already present; a failure is reported, not fatal.
 superpowers_note="already installed"
 if ! command -v claude >/dev/null 2>&1; then
-  superpowers_note="the claude CLI is not on PATH; install it yourself: /plugin install superpowers@superpowers-marketplace"
+  superpowers_note="the claude CLI is not on PATH; in Claude Code run: /plugin install superpowers@claude-plugins-official"
 elif ! claude plugin list 2>/dev/null | grep -q 'superpowers@'; then
-  if claude plugin marketplace add obra/superpowers-marketplace >/dev/null 2>&1 \
-     && claude plugin install -y superpowers@superpowers-marketplace >/dev/null 2>&1; then
+  if claude plugin install -y superpowers@claude-plugins-official >/dev/null 2>&1; then
     superpowers_note="installed at user scope"
   else
     superpowers_note="could not be installed automatically; in Claude Code run:
-       /plugin marketplace add obra/superpowers-marketplace
-       /plugin install superpowers@superpowers-marketplace"
+       /plugin install superpowers@claude-plugins-official"
   fi
 fi
 

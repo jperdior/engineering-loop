@@ -15,8 +15,8 @@ approval gate at exactly two points and everything between automated.
         ↓
   ▣ GATE 1 — the spec PR. You read it, you merge it.
         ↓
-  B. the loop: one fresh session per spec phase → a closing session
-     (review, ledger tick, archive) → one PR
+  B. the loop: one fresh session per spec phase → three closing sessions
+     (docs, review, archive) → one PR
         ↓
   ▣ GATE 2 — the PR. You read it, you merge it.
 ```
@@ -104,8 +104,9 @@ bounds a session is the phase it is given.
    directly, runs the gates, commits, ticks the phase under `## Progress`,
    rewrites the notes beneath the checklist, pushes and writes `CONTINUE`. The
    loop reads the tick from origin — a `CONTINUE` whose phase is not ticked is an
-   escalation, not progress. When no phase is left, a closing session runs
-   `/sync-context-docs`, `/code-review`, `/archive-spec`, pushes and writes `OK`;
+   escalation, not progress. When no phase is left, three closing sessions run in
+   turn, each fresh: `/sync-context-docs`, then `/code-review` with its fix wave,
+   then `/archive-spec`, which writes `OK`;
    the loop then runs `LOOP_GATES` **itself** rather than trusting the session's
    report, opens one PR on `sonnet`, attests it on origin, and records the tick
    with the measurements and the PR number.
@@ -145,7 +146,8 @@ failure the one-line sentinel cannot. Every session's result is beside it as
 | `is_error: true` | a hard API error, reported alongside `subtype: "success"` |
 | "handed over without ticking Phase N" | the session pushed but did not finish its phase |
 | "a phase session wrote OK" | the session skipped to the closing sentinel; nothing was reviewed |
-| "OK was written with N phase(s) still unticked" | the closing session ran with work still owed |
+| "the closing step … ran with N phase(s) still unticked" | a closing session ran with work still owed |
+| "the archive step wrote OK but … is not ticked" | `/archive-spec` did not tick the ledger line |
 | "the ## Progress checklist no longer parses" | a session broke the checklist it was told to tick |
 | still not finished after `MAX_SESSIONS` | it is not converging — the spec is probably contradictory |
 | a closed, unmerged PR | a human rejected the unit |

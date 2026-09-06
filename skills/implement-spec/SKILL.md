@@ -181,7 +181,8 @@ green is an `ESCALATE`.
 
 ## After all phases
 
-Interactively, once every phase is ticked; under the loop, this is the closing session's prompt:
+Interactively, once every phase is ticked. Under the loop, each numbered step below is its own
+fresh session and the prompt names the step; run only that step, push, and write the sentinel:
 
 1. **Final doc sync**: `/sync-context-docs` once more to catch anything from the last phase;
    commit doc changes.

@@ -28,9 +28,10 @@ automated, and nothing merges itself.
   worktree and starts a fresh `claude -p` session for the first unticked phase. The session writes
   the failing test first, then the code, runs your repository's gates, commits, ticks the phase in
   the spec, and pushes. The loop reads the tick back from origin and starts the next session.
-- **Reviews the whole branch, then opens one PR.** When every phase is ticked, a closing session
-  syncs the context docs, runs a three-reviewer code review over the full diff, and archives the
-  spec. The loop then runs your gates itself on the host and opens the PR.
+- **Reviews the whole branch, then opens one PR.** When every phase is ticked, three closing
+  sessions run in turn: one syncs the context docs, one runs a three-reviewer code review over the
+  full diff and fixes what it finds, one archives the spec. The loop then runs your gates itself on
+  the host and opens the PR.
 - **Stops when something is wrong.** A session that exits without proof of progress is never
   retried. The loop stops, says why, and leaves the last session's full result on disk.
 
@@ -66,10 +67,12 @@ with a prompt that names the spec, the unit, the phase, and the base commit. The
 it ends by writing a one-line sentinel. The loop verifies the sentinel against origin and against
 the phase checklist, then starts the next session.
 
-**A closing session reviews the branch.** With every phase ticked, one more session runs
-`/sync-context-docs`, `/code-review` over the whole diff, and `/archive-spec`. The loop then runs
-`LOOP_GATES` itself, opens the PR through a short `/open-pr` session, and records the unit's
-measured size and per-session telemetry on the branch.
+**Three closing sessions finish the branch.** With every phase ticked, the loop runs one fresh
+session per closing step: `/sync-context-docs`, then `/code-review` over the whole diff with its
+fix wave, then `/archive-spec`. Each is verified like a phase: the pushed sha must match the
+sentinel, and the archive step's `OK` is believed only when the ledger line is ticked on origin.
+The loop then runs `LOOP_GATES` itself, opens the PR through a short `/open-pr` session, and
+records the unit's measured size and per-session telemetry on the branch.
 
 **Everything is resumable.** Phase ticks and the ledger tick are commits on the unit's branch.
 Re-running the same command after a pause or an escalation reads the ticks from origin and
@@ -109,6 +112,18 @@ cp .loop/loop.env.dist .loop/loop.env && chmod 600 .loop/loop.env
 ```
 
 Commit `.loop/`, `.claude/skills/`, and `.gitignore`.
+
+**As a plugin.** The skills can also come from Claude Code's plugin system, which keeps them out
+of the host's `.claude/skills/`:
+
+```
+/plugin marketplace add jperdior/engineering-loop
+/plugin install engineering-loop@engineering-loop
+```
+
+The engine still has to be vendored, because the skills call `.loop/parse-ledger.sh` and the loop
+reads `.loop/loop.env`. Run install.sh as above; it skips the skill symlinks when it finds the
+plugin installed.
 
 ## Use
 
@@ -176,7 +191,7 @@ All settings live in `.loop/loop.env`. A value exported in the shell overrides t
 | `LOOP_CLEAN_WORKTREE` | unset | a command run inside a worktree before it is removed |
 | `LOOP_SIZE_EXCLUDES` | unset | generated paths excluded from the size the ledger records |
 | `LOOP_DENIALS_EXTRA` | unset | extra tools a session must never run, e.g. `Bash(make migrate)` |
-| `MAX_SESSIONS` | phases + 2 | sessions per invocation before the unit is declared non-converging |
+| `MAX_SESSIONS` | phases + 4 | sessions per invocation before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
 | `SESSION_CONTEXT_ALARM` | `150000` | peak context above which a phase is flagged as cut too large |
 | `DELIVERY_LOOP_NOTIFY` | unset | a command that receives the headline when the loop needs you |

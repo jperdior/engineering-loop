@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "engineering-loop",
+  "description": "The engineering-loop skills: from a feature request to a reviewed pull request, one spec phase per fresh session.",
+  "owner": {
+    "name": "Julio Perdiguer"
+  },
+  "plugins": [
+    {
+      "name": "engineering-loop",
+      "description": "From a feature request to a reviewed pull request: interview, spec, audit, one fresh session per spec phase, review, PR. The skills only; the engine is vendored into the host by install.sh.",
+      "author": {
+        "name": "Julio Perdiguer"
+      },
+      "category": "development",
+      "source": "./",
+      "homepage": "https://github.com/jperdior/engineering-loop"
+    }
+  ]
+}

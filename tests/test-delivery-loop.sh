@@ -131,7 +131,7 @@ if run_loop --dry-run && grep -q "PR 1 on feat-one" "$TMP/out" \
 else fail "plan output or side effects wrong: $(tail -5 "$TMP/out")"; fi
 
 CASE="--dry-run counts the sessions a unit will take"
-if grep -q "phases: 3, one session each, then a closing session (MAX_SESSIONS=5)" "$TMP/out"; then pass
+if grep -q "phases: 3, one session each, then 3 closing sessions: docs, review, archive (MAX_SESSIONS=7)" "$TMP/out"; then pass
 else fail "$(grep phases "$TMP/out")"; fi
 
 # --------------------------------------------------------------------------- the happy path
@@ -143,11 +143,14 @@ if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ] && remote_has feat-one \
    && [ ! -d "$REPO/.loop/state/lock" ]; then pass; else fail "$(tail -3 "$TMP/err")"; fi
 
 # ONE PHASE PER SESSION. A session cannot observe its own context, so the loop bounds it by giving
-# it exactly one phase and starting a fresh process for the next.
-CASE="each phase gets its own session, and one more closes the unit"
-if [ "$(sessions feat-one)" = 4 ] \
+# it exactly one phase and starting a fresh process for the next. The closing work is split the same
+# way: the docs, the review and the archive each get a fresh session, in that order.
+CASE="each phase gets its own session, and three more close the unit in order"
+if [ "$(sessions feat-one)" = 6 ] \
    && [ "$(git -C "$REPO" show feat-one:sessions-feat-one.txt | sed -n 1p)" = "session feat-one Phase 1" ] \
-   && [ "$(git -C "$REPO" show feat-one:sessions-feat-one.txt | sed -n 4p)" = "session feat-one closing" ]; then pass
+   && [ "$(git -C "$REPO" show feat-one:sessions-feat-one.txt | sed -n 4p)" = "session feat-one closing:docs" ] \
+   && [ "$(git -C "$REPO" show feat-one:sessions-feat-one.txt | sed -n 5p)" = "session feat-one closing:review" ] \
+   && [ "$(git -C "$REPO" show feat-one:sessions-feat-one.txt | sed -n 6p)" = "session feat-one closing:archive" ]; then pass
 else fail "sessions: $(git -C "$REPO" show feat-one:sessions-feat-one.txt 2>/dev/null | tr '\n' ';')"; fi
 
 CASE="every phase is ticked on the branch"
@@ -181,7 +184,7 @@ run_loop
 telem="$(git -C "$REPO" show "feat-one:.ai/telemetry/fixture/PR-1.md" 2>/dev/null || true)"
 # shellcheck disable=SC2012
 if [ "$(printf '%s\n' "$telem" | grep -c '^| Phase ')" = 3 ] \
-   && printf '%s' "$telem" | grep -q '^| closing ' \
+   && [ "$(printf '%s\n' "$telem" | grep -c '^| closing:')" = 3 ] \
    && printf '%s' "$telem" | grep -q "peak context" \
    && printf '%s' "$telem" | grep -q "| PR | #"; then pass
 else fail "telemetry: $telem; state: $(ls "$REPO/.loop/state/" | tr "\n" " ")"; fi
@@ -217,13 +220,13 @@ else fail "not idempotent: $(tail -2 "$TMP/out")"; fi
 
 CASE="build sessions run on LOOP_MODEL and the PR session on sonnet"
 fresh models
-if run_loop && [ "$(grep -c '^opus$' "$LOOP_TEST_DIR/models.txt")" = 4 ] \
+if run_loop && [ "$(grep -c '^opus$' "$LOOP_TEST_DIR/models.txt")" = 6 ] \
    && [ "$(sed -n '$p' "$LOOP_TEST_DIR/models.txt")" = "sonnet" ]; then pass
 else fail "models: $(tr '\n' ' ' < "$LOOP_TEST_DIR/models.txt")"; fi
 
 CASE="LOOP_MODEL overrides the build model"
 fresh modelsov
-if LOOP_MODEL=sonnet run_loop && [ "$(grep -c '^sonnet$' "$LOOP_TEST_DIR/models.txt")" = 5 ]; then pass
+if LOOP_MODEL=sonnet run_loop && [ "$(grep -c '^sonnet$' "$LOOP_TEST_DIR/models.txt")" = 7 ]; then pass
 else fail "models: $(tr '\n' ' ' < "$LOOP_TEST_DIR/models.txt")"; fi
 
 # --------------------------------------------------------------------------- resuming
@@ -239,7 +242,7 @@ set +e
 set -e
 if [ "$rc" = 5 ] && [ "$(sessions feat-one)" = 1 ] && [ "$(phase_ticks feat-one)" = 1 ] \
    && grep -q "paused: the usage limit is reached" "$TMP/out" && ! grep -q "ESCALATE" "$TMP/err"; then
-  if run_loop && [ "$(sessions feat-one)" = 4 ] && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+  if run_loop && [ "$(sessions feat-one)" = 6 ] && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
   else fail "the resumed run did not finish: $(tail -2 "$TMP/err")"; fi
 else
   fail "exit $rc, sessions=$(sessions feat-one): $(tail -2 "$TMP/err")"
@@ -262,6 +265,38 @@ if run_loop; then
 else
   fail "$(tail -3 "$TMP/err")"
 fi
+
+# The closing steps are read from the branch like the phases: the docs and review steps each leave a
+# commit, and the archive step's tick is what the loop believes.
+CASE="the closing steps land on the branch in order, and the archive is last"
+fresh closingorder
+run_loop
+closing="$(git -C "$REPO" show feat-one:closing-feat-one.txt 2>/dev/null | tr '\n' ';')"
+if [ "$closing" = "closing step docs;closing step review;" ] && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "closing steps: $closing"; fi
+
+# --------------------------------------------------------------------------- the local branch
+
+# A local branch that never reached origin may be someone's work. Only an empty one -- what a session
+# that never committed leaves behind -- is dropped; one carrying commits stops the run.
+CASE="a local branch with unpushed commits is kept, and the run escalates"
+fresh localbranch
+git -C "$REPO" worktree add -q -b feat-one "$TMP/lb" origin/main
+echo mine > "$TMP/lb/mine.txt"
+git -C "$TMP/lb" add -A && git -C "$TMP/lb" commit -qm "unpushed work"
+git -C "$REPO" worktree remove --force "$TMP/lb"
+set +e
+run_loop; rc=$?
+set -e
+if [ "$rc" = 4 ] && grep -q "never reached origin" "$TMP/err" \
+   && [ "$(git -C "$REPO" rev-list --count origin/main..feat-one)" = 1 ]; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+CASE="an empty local branch is dropped and the unit is built"
+fresh emptybranch
+git -C "$REPO" branch feat-one origin/main
+if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "$(tail -2 "$TMP/err")"; fi
 
 # --------------------------------------------------------------------------- escalations
 
@@ -717,7 +752,7 @@ else fail "the file's DELIVERY_LOOP_NOTIFY never applied"; fi
 CASE="the shell wins over the env file"
 fresh envwins
 printf 'LOOP_MODEL=haiku\n' > "$REPO/.loop/loop.env"
-if LOOP_MODEL=sonnet run_loop && [ "$(grep -c '^sonnet$' "$LOOP_TEST_DIR/models.txt")" = 5 ] \
+if LOOP_MODEL=sonnet run_loop && [ "$(grep -c '^sonnet$' "$LOOP_TEST_DIR/models.txt")" = 7 ] \
    && ! grep -q '^haiku$' "$LOOP_TEST_DIR/models.txt"; then pass
 else fail "the file overrode an explicit LOOP_MODEL: $(tr '\n' ' ' < "$LOOP_TEST_DIR/models.txt")"; fi
 

@@ -5,10 +5,10 @@
 # told to echo back -- so the stub cannot drift from the prompt the loop actually sends.
 #
 # A prompt with a `Phase:` line is a phase session: the stub commits a line of work, ticks that
-# phase under `## Progress`, pushes and writes CONTINUE. A prompt with a sentinel template but no
-# `Phase:` line is the closing session: it ticks the ledger line the way /archive-spec does (with a
-# measured line, before the PR exists) and writes OK. A prompt with no sentinel template at all is
-# the /open-pr session.
+# phase under `## Progress`, pushes and writes CONTINUE. A prompt with a `Step:` line is a closing
+# session: the docs and review steps commit a marker line and write CONTINUE; the archive step ticks
+# the ledger line the way /archive-spec does (with a measured line, before the PR exists) and writes
+# OK. A prompt with no sentinel template at all is the /open-pr session.
 #
 # LOOP_TEST_CLAUDE selects the outcome:
 #
@@ -21,8 +21,8 @@
 #   stale          write a sentinel carrying a previous run's id
 #   noticks        a phase session that pushes and hands over WITHOUT ticking its phase
 #   okphase        a phase session that writes OK, which only the closing session may
-#   continueclose  a closing session that writes CONTINUE instead of OK
-#   notebox        a closing session that leaves an unlabelled checkbox under ## Progress
+#   continueclose  the archive step writes CONTINUE instead of OK
+#   notebox        the archive step leaves an unlabelled checkbox under ## Progress
 #   quota          the second session is refused for the account's usage limit
 #   archived       the closing session moves the ticked spec to .ai/specs/implemented/
 #
@@ -102,10 +102,11 @@ esac
 spec="$(printf '%s\n' "$prompt" | sed -n 's/^Spec:[[:space:]]*//p' | head -1)"
 unit_label="$(printf '%s\n' "$prompt" | sed -n 's/^Unit:[[:space:]]*\([^ ]* [^ ]*\) .*/\1/p' | head -1)"
 phase="$(printf '%s\n' "$prompt" | sed -n 's/^Phase:[[:space:]]*\([^—]*[^ —]\).*/\1/p' | head -1)"
+step="$(printf '%s\n' "$prompt" | sed -n 's/^Step:[[:space:]]*//p' | head -1)"
 
 # APPEND, ONE LINE PER SESSION, so a session that never ran is distinguishable from one that did:
 # on a shared branch an overwrite makes two sessions produce a byte-identical tree.
-printf 'session %s %s\n' "$branch" "${phase:-closing}" >> "sessions-$branch.txt"
+printf 'session %s %s\n' "$branch" "${phase:-closing:$step}" >> "sessions-$branch.txt"
 
 if [ -n "$phase" ]; then
   # A phase session ticks its own line under ## Progress. `noticks` is the session that pushes and
@@ -115,8 +116,11 @@ if [ -n "$phase" ]; then
         $0 ~ "^- \\[ \\] \\*\\*" p "\\*\\*" { sub(/^- \[ \]/, "- [x]") }
         { print }' "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
   fi
+elif [ "$step" != archive ]; then
+  # The docs and review steps leave a commit each, so the order of the closing steps is on the branch.
+  printf 'closing step %s\n' "$step" >> "closing-$branch.txt"
 else
-  # The closing session runs /archive-spec, which ticks the ledger BEFORE the PR exists AND writes a
+  # The archive step runs /archive-spec, which ticks the ledger BEFORE the PR exists AND writes a
   # measured line -- the loop's "is this recorded?" test reads that same line, so a stub that ticked
   # without measuring would hide the record stage being skipped.
   if [ -f "$spec" ] && [ -n "$unit_label" ]; then
@@ -155,10 +159,10 @@ case "$mode" in
   okphase)       echo "OK $branch $sha $run_id" > "$status_file" ;;
   continueclose) echo "CONTINUE $branch $sha $run_id" > "$status_file" ;;
   *)
-    if [ -n "$phase" ]; then
-      echo "CONTINUE $branch $sha $run_id" > "$status_file"
-    else
+    if [ -z "$phase" ] && [ "$step" = archive ]; then
       echo "OK $branch $sha $run_id" > "$status_file"
+    else
+      echo "CONTINUE $branch $sha $run_id" > "$status_file"
     fi
     ;;
 esac
