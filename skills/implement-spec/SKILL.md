@@ -1,6 +1,6 @@
 ---
 name: implement-spec
-description: Implement an approved spec from .ai/specs/, phase by phase, on the subagent-driven-development engine with the verification gate enforced as the per-phase review rubric and a single code review once all phases are done. Triggers on "implement spec", "build from spec", "code the spec", "implement phase X".
+description: "Implement an approved spec from .ai/specs/, phase by phase, on the subagent-driven-development engine with the verification gate enforced as the per-phase review rubric and a single code review once all phases are done. Triggers on \"implement spec\", \"build from spec\", \"code the spec\", \"implement phase X\"."
 ---
 
 # Implement Spec

@@ -34,3 +34,4 @@ jobs:
           bash tests/test-unit-size.sh
           bash tests/test-reclaim-worktree.sh
           bash tests/test-setup-wizard.sh
+          bash tests/test-skills-frontmatter.sh

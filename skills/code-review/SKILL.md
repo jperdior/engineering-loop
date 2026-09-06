@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review code changes (PR, diff, branch, commit) against the host repository's documented conventions, security, and test quality. Runs the verification gate as part of the review. Triggers on "code review", "review this PR", "review the diff", "review my branch".
+description: "Review code changes (PR, diff, branch, commit) against the host repository's documented conventions, security, and test quality. Runs the verification gate as part of the review. Triggers on \"code review\", \"review this PR\", \"review the diff\", \"review my branch\"."
 ---
 
 # Code Review

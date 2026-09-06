@@ -1,6 +1,6 @@
 ---
 name: open-pr
-description: Open a GitHub PR for the current branch with a templated body, labels, and a link to the spec. Triggers on "open a PR", "create the PR", "submit PR".
+description: "Open a GitHub PR for the current branch with a templated body, labels, and a link to the spec. Triggers on \"open a PR\", \"create the PR\", \"submit PR\"."
 ---
 
 # Open PR

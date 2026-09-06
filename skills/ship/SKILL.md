@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Take a feature from a sentence to a merged PR — interview, spec, audit, the user's OK, then the unattended loop, which builds one spec phase per fresh session in that same worktree until the feature is built. Two human gates: the spec, and the PR. Triggers on "ship", "build me", "let's build", "I want a feature that", "take this from idea to PRs".
+description: "Take a feature from a sentence to a merged PR — interview, spec, audit, the user's OK, then the unattended loop, which builds one spec phase per fresh session in that same worktree until the feature is built. Two human gates: the spec, and the PR. Triggers on \"ship\", \"build me\", \"let's build\", \"I want a feature that\", \"take this from idea to PRs\"."
 ---
 
 # Ship

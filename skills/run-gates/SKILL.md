@@ -1,6 +1,6 @@
 ---
 name: run-gates
-description: Run the host repository's verification gate — read the gate commands from the spec's ## Gates section (or derive them from the host's AGENTS.md when no spec is in play), dispatch each as a parallel subagent, and report PASS/FAIL per gate with evidence. Triggers on "run the gate", "run gates", "verify the branch", "ci gate".
+description: "Run the host repository's verification gate — read the gate commands from the spec's ## Gates section (or derive them from the host's AGENTS.md when no spec is in play), dispatch each as a parallel subagent, and report PASS/FAIL per gate with evidence. Triggers on \"run the gate\", \"run gates\", \"verify the branch\", \"ci gate\"."
 ---
 
 # Run the Verification Gate

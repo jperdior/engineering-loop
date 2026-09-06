@@ -1,6 +1,6 @@
 ---
 name: new-feature
-description: Create an isolated git worktree on a new branch from main and enter it, ready for feature work. Triggers on "new feature", "let's do a new feature", "start a feature", "let's plan a feature", "new branch for", "open a worktree".
+description: "Create an isolated git worktree on a new branch from main and enter it, ready for feature work. Triggers on \"new feature\", \"let's do a new feature\", \"start a feature\", \"let's plan a feature\", \"new branch for\", \"open a worktree\"."
 ---
 
 # New Feature
