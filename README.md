@@ -48,7 +48,9 @@ automated, and nothing merges itself.
   origin, the pushed sha is checked against the sentinel, the gates are re-run on the host, and
   the PR is confirmed to exist before it is recorded.
 - **Your rules, not the engine's.** The skills build to whatever your `AGENTS.md` or `CLAUDE.md`
-  declares, and run whatever gates you name. The engine carries no architecture opinions of its
+  declares, run whatever gates you name, and use whatever skills your repository has written for
+  itself: each spec phase names the host skills it must build through, resolved from your skill
+  index when the spec is written and approved. The engine carries no architecture opinions of its
   own.
 - **Two human gates, clearly placed.** You spend attention on the spec, where it matters most, and
   on the final PR. The loop never merges.
@@ -187,7 +189,28 @@ _Notes:_ what the last session learned that the spec does not say.
   anything else goes under `_Notes:_` as prose.
 - The notes are the handover between sessions. A session rewrites them when it ticks its phase.
 
-`.loop/parse-ledger.sh <spec>` prints the ledger; `--phases` prints the checklist.
+Each phase also has its own section under `## Phasing`, and that section names **your** skills the
+phase must use:
+
+```markdown
+## Phasing
+
+### Phase 2 — the endpoint and its client
+
+- **Build:** …
+- **Skills:** `add-route`, `integration-tests`, `regenerate-api-client`
+- **Done when:** …
+```
+
+`/spec-writing` resolves the list from your **skill index** — the router table in your root
+`AGENTS.md` / `CLAUDE.md` that maps kinds of task to skills, or failing that the description of
+every `.claude/skills/*/SKILL.md` — so a repository with its own scaffolds, test runners and
+linters has them named per phase, by name, in a document a human approves. The loop puts the names
+in the session's prompt and `/implement-spec` invokes them before writing code; `/pre-implement-spec`
+fails a name that resolves to nothing. A phase nothing applies to has no `Skills:` line.
+
+`.loop/parse-ledger.sh <spec>` prints the ledger; `--phases` prints the checklist;
+`--skills "Phase N"` prints that phase's skills.
 
 ## Configuration
 

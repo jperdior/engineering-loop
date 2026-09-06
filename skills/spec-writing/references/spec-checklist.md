@@ -9,6 +9,7 @@
 - [ ] `## Delivery` ledger present; **one** unit on one line, naming its branch first in backticks
 - [ ] `## Progress` present, opening with one `- [ ] **Phase N** — title` line per phase, in the order and with the titles of `## Phasing`
 - [ ] Every unindented checkbox under `## Progress` is a phase line; notes are prose under `_Notes:_`
+- [ ] Each phase has a `### Phase N — title` section under `## Phasing`, and its `- **Skills:**` line names the host skills its deliverables call for — each resolving to a skill the host has — or is absent because none applies
 - [ ] Every unit leaves `main` deployable **when merged in ledger order** — no half-wired feature, no reader without its migration
 - [ ] A second unit names a real deployment seam and its required merge order
 - [ ] Changelog section present

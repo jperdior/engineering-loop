@@ -37,6 +37,16 @@ write_spec() {
   cat > "$1/$SPEC_REL" <<'SPEC'
 # Fixture spec
 
+## Phasing
+
+### Phase 1 — the port
+
+- **Skills:** `scaffold-port`, `port-tests`
+
+### Phase 2 — the adapter
+
+No Skills line: the host has none that apply to this phase.
+
 ## Delivery
 
 - [ ] **PR 1** — `feat-one` — the whole thing — est ~100
@@ -117,6 +127,7 @@ fresh() {
   : > "$LOOP_TEST_DIR/session-ids.txt"
   : > "$LOOP_TEST_DIR/resumes.txt"
   : > "$LOOP_TEST_DIR/record-ids.txt"
+  : > "$LOOP_TEST_DIR/skills.txt"
 }
 
 run_loop() {
@@ -213,6 +224,13 @@ CASE="--dry-run counts the sessions a unit will take"
 if grep -q "phases: 3, one session each, then 3 closing sessions: docs, review, archive (MAX_SESSIONS=7)" "$TMP/out"; then pass
 else fail "$(grep phases "$TMP/out")"; fi
 
+# The skills a phase names are resolved at gate 1, where a human reads the spec; the plan shows them
+# beside the phase so what the session will be told is visible before it is paid for.
+CASE="--dry-run lists the skills each phase names"
+if grep -q "skills: scaffold-port, port-tests" "$TMP/out" \
+   && [ "$(grep -c 'skills:' "$TMP/out")" = 1 ]; then pass
+else fail "$(grep -c 'skills:' "$TMP/out") skills lines: $(grep skills "$TMP/out")"; fi
+
 # --------------------------------------------------------------------------- the happy path
 
 CASE="the unit is built, ticked once and reclaimed"
@@ -239,6 +257,14 @@ CASE="the base is where the unit started, in every session"
 if [ "$(sort -u "$LOOP_TEST_DIR/bases.txt" | wc -l | tr -d ' ')" = 1 ] \
    && [ "$(sed -n 1p "$LOOP_TEST_DIR/bases.txt")" = "$(git -C "$REPO" rev-parse origin/main)" ]; then pass
 else fail "bases: $(tr '\n' ' ' < "$LOOP_TEST_DIR/bases.txt")"; fi
+
+# The host's skills reach the session through the prompt, not through its skill list: a fresh
+# session invokes what it is told to, and a phase whose section names none is told none.
+CASE="a phase session is told the skills its section names, and only those"
+if grep -qx 'Phase 1|scaffold-port, port-tests' "$LOOP_TEST_DIR/skills.txt" \
+   && grep -qx 'Phase 2|' "$LOOP_TEST_DIR/skills.txt" \
+   && grep -qx 'closing:docs|' "$LOOP_TEST_DIR/skills.txt"; then pass
+else fail "skills: $(tr '\n' ' ' < "$LOOP_TEST_DIR/skills.txt")"; fi
 
 # A resumed run must not take the branch TIP as the base, or the closing review sees only the
 # phases built in the second invocation.

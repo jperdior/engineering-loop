@@ -67,10 +67,24 @@ For each endpoint, include:
 
 ## Phasing
 
-| Phase | Goal | Deliverable |
-|-------|------|-------------|
-| 1 | …  | … (each phase ends with the host's gates green) |
-| 2 | …  | … |
+One phase is one session. Each phase has its own section, in the order and with the titles of the
+`## Progress` checklist; `.loop/parse-ledger.sh --skills "Phase N"` reads its `Skills:` line.
+
+### Phase 1 — {title}
+
+- **Build:** {what this phase delivers; the files it opens, named}
+- **Skills:** `{host-skill}`, `{host-skill}` — {the host's own skills this phase must use, resolved
+  against the host's skill index (the root AGENTS.md router, else `.claude/skills/*/SKILL.md`).
+  Omit the line when none applies; never leave it empty.}
+- **Read first:** {the spec sections a fresh session reads before anything else}
+- **Done when:** {the Integration Coverage rows that prove it, and the host's gates green}
+
+### Phase 2 — {title}
+
+- **Build:** …
+- **Skills:** …
+- **Read first:** …
+- **Done when:** …
 
 ## Delivery
 

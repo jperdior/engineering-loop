@@ -29,12 +29,38 @@ analysis and 2-3 alternative designs with trade-offs.
    > "You're on `main`. Run `/new-feature feat-<slug>` first to create the feature worktree, then re-run `/spec-writing` from inside it."
    Do not create any file, do not read context, do not proceed until the branch is a `feat-*` branch.
 1. **Load context**: read the task description, then the host's root `AGENTS.md` / `CLAUDE.md` and the nearest one to each area the change touches. Identify which modules, packages and apps are affected, and follow every pointer those files give. A spec that silently contradicts a rule the host has written down is a **Critical** finding.
+
+   Then read **the host's skill index** — the skills this repository has written for building in it, which the phases will name (step 7). It is, in order of preference:
+   - the router or index table in the root `AGENTS.md` / `CLAUDE.md` that maps kinds of task to `SKILL.md` files, when the host keeps one;
+   - otherwise the `description:` line of every `.claude/skills/*/SKILL.md`.
+
+   The engine's own skills — `ship`, `spec-writing`, `pre-implement-spec`, `implement-spec`, `run-gates`, `code-review`, `sync-context-docs`, `archive-spec`, `new-feature`, `open-pr` — are the process and are never part of the index. What the index holds is the host's: how it scaffolds a module, adds an endpoint, writes a migration, runs its linters, creates a page, translates a string.
 2. **Initialize**: create `.ai/specs/{YYYY-MM-DD}-{kebab-case-title}.md`.
 3. **Start minimal — skeleton + open-questions gate**: write a skeleton (TLDR + 2-3 key sections only). Before writing it, scan the brief for **critical unknowns** — decisions where the wrong assumption forces a rewrite. List them as an **Open Questions** block (`Q1`, `Q2`, …) immediately after the TLDR. **STOP after presenting the skeleton.** Do not proceed past this gate until the user has answered every question.
 4. **Apply answers**: remove the Open Questions block and fill the skeleton.
 5. **Research**: when relevant, compare against open-source leaders, RFCs, or the framework's own recipes. Quote evidence.
 6. **Design**: write the Architecture, Data Models and API Contracts sections. Name, for every unit of state the spec introduces, where it lives and which module owns it; for every endpoint, its route, its auth requirement and the exact JSON shape of its request and response; for every interaction across a boundary the host declares, the mechanism the host permits — never an import the host forbids.
 7. **Phasing and the Delivery ledger**: break delivery into testable phases. Each phase ends with the host's gates green and a working app. Define phases at a granularity that is independently reviewable and leaves the app in a valid state at each checkpoint.
+
+    Write each phase as its own `### Phase N — title` section under `## Phasing`, and in it **name the
+    host's skills the phase must use**, resolved against the skill index read in step 1:
+
+    ```markdown
+    ### Phase 2 — the endpoint and its client
+
+    - **Build:** …
+    - **Skills:** `add-route`, `integration-tests`, `regenerate-api-client`
+    - **Done when:** …
+    ```
+
+    Match the phase's deliverables against the index: a new module takes the host's scaffold, an
+    endpoint its route skill and its test skill, a UI change its page skill and its translation
+    skill, and so on. Each name is a backticked skill name that exists in the host. A phase to
+    which nothing in the index applies has no `Skills:` line — never an empty one.
+    `.loop/parse-ledger.sh <spec> --skills "Phase N"` reads the line; the delivery loop puts the
+    names in the session's prompt, and `/implement-spec` invokes them before writing. This is the
+    only place the host's skills are resolved, and the human who approves the spec reads the
+    resolution: a phase that names the wrong skill, or none where one applies, is caught here.
 
     Then declare a `## Delivery` section — **one unit, for the whole feature**:
 
@@ -161,6 +187,9 @@ See [references/spec-checklist.md](references/spec-checklist.md).
 11. **Testability by phase**: can each phase be built and proved by one fresh session, with the tests
     it needs named in its own section? A phase whose tests live in another phase is not
     independently verifiable.
+12. **Skills by phase**: does each phase's `- **Skills:**` line name the host skills its deliverables
+    call for, each resolving to a skill the host has? A deliverable the index has a skill for, with
+    no skill named, is **High**; a name that resolves to nothing is **High**.
 
 ## Reference Materials
 

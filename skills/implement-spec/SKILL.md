@@ -93,7 +93,12 @@ If any precondition fails, stop and inform the user — under the loop, write
    unit already ticked `- [x]` means this branch's work is claimed as delivered: stop and ask. A
    ledger that names no unit for this branch is a failed precondition too.
 4. **Read the host's rules**: the root `AGENTS.md` / `CLAUDE.md`, and the nearest one to the
-   code this spec touches. They are the build rules — this skill does not restate them.
+   code this spec touches. They are the build rules — this skill does not restate them. The
+   host's **skills** the phase must use are named in the phase's own section:
+   ```sh
+   .loop/parse-ledger.sh <spec-file> --skills "Phase N"   # one host skill per line
+   ```
+   Under the loop the prompt repeats them as a `Skills:` line.
 5. Interactively: resolve the SDD workspace with `scripts/sdd-workspace <spec-file>` and check
    for an existing ledger at `<workspace>/progress.md`. A ledger whose first line names **this
    spec file** means work is resumable — phases with a `Task <N>: complete` line are DONE;
@@ -125,6 +130,12 @@ bind you directly:
   against the spec and the tree. A contradiction is an escalation, never something to improvise
   past — the spec is a human's gate, and amending it to match what you would rather build
   removes the gate.
+- **The phase's skills first.** Invoke every skill the phase's `- **Skills:**` line names — the
+  loop's prompt repeats them as `Skills:` — before writing any code, and build through them. They
+  are the host's own scaffolds, test runners and checks for exactly this kind of change, resolved
+  when the spec was approved; a session that hand-rolls what the host has a skill for produces
+  code the host's conventions do not recognise. Interactively, the list goes into the dispatch
+  brief verbatim. A named skill that does not exist is an escalation, not something to skip.
 - **Test first, always.** Invoke `superpowers:test-driven-development` and follow it: write the
   failing test the phase's section names, watch it fail, write the minimum code that passes,
   refactor with the test green. No production code lands before a failing test that wants it.
