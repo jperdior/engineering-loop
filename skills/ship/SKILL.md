@@ -5,6 +5,11 @@ description: Take a feature from a sentence to a merged PR — interview, spec, 
 
 # Ship
 
+> **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
+> (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill
+> loads. `<state>` is `~/.local/state/engineering-loop/<repo>/`, the loop's state for this
+> repository; `--dry-run` prints the exact path. Nothing of either lives in the repository.
+
 The front door. One command from *"I want X"* to a merged PR, with the human as an
 approval gate at exactly two points and everything between automated.
 
@@ -38,7 +43,7 @@ Do not ask. Derive it, from inside the feature's worktree:
 
 ```sh
 git branch --show-current                     # feat-<slug>, or main if there is no worktree yet
-.loop/parse-ledger.sh .ai/specs/{file}.md --phases 2>/dev/null
+<loop>/parse-ledger.sh .ai/specs/{file}.md --phases 2>/dev/null
 ```
 
 - No worktree, or no spec on this branch → **Phase A**.
@@ -58,13 +63,13 @@ common case, not the exception.
      terminal.
    - `jq`, and `timeout` or `gtimeout`, on PATH. Name the install line otherwise
      (`brew install coreutils jq` on macOS).
-   - When `.loop/loop.env` sets `LOOP_SANDBOX=1`, run `.loop/setup-loop.sh --show`: it reports
+   - When `~/.config/engineering-loop/loop.env` sets `LOOP_SANDBOX=1`, run `<loop>/setup-loop.sh --show`: it reports
      which of the two tokens are set without printing a value. If either is missing, tell the user
-     to run `.loop/setup-loop.sh` in their own terminal. Say what it will ask for, so they can
+     to run `<loop>/setup-loop.sh` in their own terminal. Say what it will ask for, so they can
      have both ready: the token `claude setup-token` prints (their own subscription, valid about a
      year), and a fine-grained GitHub personal access token scoped to **this repository** with
      *Contents: read and write* and *Pull requests: read and write*. The script explains each at
-     the prompt, reads them without echoing, and writes `.loop/loop.env` at 0600.
+     the prompt, reads them without echoing, and writes `~/.config/engineering-loop/loop.env` at 0600.
 
    **Never ask for a token value in the chat**, and never accept one pasted there: a token in a
    message lands in the transcript. The script exists so the values never pass through a
@@ -101,7 +106,7 @@ common case, not the exception.
    audit verdict, name the worktree, and say plainly that nothing is built yet.
    **Nothing runs until they say so** — not the dry run, not the loop.
 
-Nothing gates on lines: `.loop/unit-size.sh` reports and always exits 0. What
+Nothing gates on lines: `<loop>/unit-size.sh` reports and always exits 0. What
 bounds a session is the phase it is given.
 
 ## Phase B — the loop
@@ -122,7 +127,7 @@ bounds a session is the phase it is given.
 
 1. **Plan first, always.**
    ```sh
-   .loop/delivery-loop.sh .ai/specs/{file}.md --dry-run
+   <loop>/delivery-loop.sh .ai/specs/{file}.md --dry-run
    ```
    Show the user the plan: the unit, its branch, its phases with their ticks and
    skills, the gates and where they came from, the models, the bounds. It creates
@@ -133,9 +138,10 @@ bounds a session is the phase it is given.
    memory. So the loop is started as its own process group, with its output in a
    log outside the repository, and the session only watches:
    ```sh
-   mkdir -p ~/.loop-runs
-   LOG=~/.loop-runs/$(basename "$(git rev-parse --show-toplevel)")-$(git branch --show-current).log
-   ( set -m; nohup bash -c '.loop/delivery-loop.sh "$1"; echo "delivery-loop: exit $?"' _ .ai/specs/{file}.md \
+   RUNS=${XDG_STATE_HOME:-$HOME/.local/state}/engineering-loop/runs
+   mkdir -p "$RUNS"
+   LOG=$RUNS/$(basename "$(git rev-parse --show-toplevel)")-$(git branch --show-current).log
+   ( set -m; nohup bash -c '<loop>/delivery-loop.sh "$1"; echo "delivery-loop: exit $?"' _ .ai/specs/{file}.md \
        >"$LOG" 2>&1 & echo $! >"$LOG.pid" )
    ```
    Tell the user the log path and that the run survives closing this chat. Then
@@ -170,7 +176,7 @@ one. `--dry-run` prints them with their source.
 **If the loop pauses (exit 5), the account's usage limit is reached.** Nothing is
 wrong with the unit. Say so, and when the user says to continue, re-run the same
 command: the loop **continues the refused session** — `claude --resume` on the id
-in `.loop/state/units/<branch>/session`, in the worktree that session left — rather
+in `<state>/units/<branch>/session`, in the worktree that session left — rather
 than rebuilding its phase. A session commits once, at the end of its phase, so the
 refused one's work is uncommitted in that worktree and nowhere else. Built in
 place, that worktree is the user's own and is never reclaimed by anything; deleting
@@ -187,13 +193,13 @@ is told — a session cannot observe its own context.
 ## When the loop escalates (exit 4)
 
 It stopped because the unit is **finished and wrong**, which is not the same as
-unfinished. Never retry it blindly. Read `.loop/state/<branch>.json` — the last
+unfinished. Never retry it blindly. Read `<state>/<branch>.json` — the last
 session's whole result is there, and it is the only thing that can explain a
 failure the one-line sentinel cannot. Every session's result is beside it as
 `<branch>.s<run>-<pid>-<n>.json`.
 
 The worktree is still there. If the session wrote **no** sentinel — it stopped to
-ask, timed out, or was killed — so is `.loop/state/units/<branch>/session`, naming
+ask, timed out, or was killed — so is `<state>/units/<branch>/session`, naming
 the phase that was in flight, and a re-run resumes that session rather than
 rebuilding its phase: answering the question and re-running is the ordinary path. A
 session that wrote `ESCALATE:` reported on itself and had its say, so its record is
@@ -201,7 +207,7 @@ dropped; the worktree stays, and a re-run builds that phase fresh in it. Either 
 read the worktree before deciding anything — an escalation leaves work on disk that
 no commit mentions. Built in place, the worktree is the user's own — do not offer to
 reclaim it at all. A worktree the loop created (a run driven from `main`) goes with
-`.loop/reclaim-worktree.sh <path>`, and only once the user has decided what happens
+`<loop>/reclaim-worktree.sh <path>`, and only once the user has decided what happens
 to that work.
 
 | Sentinel / signal | What actually happened |

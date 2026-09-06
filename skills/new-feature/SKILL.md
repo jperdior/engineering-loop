@@ -30,6 +30,14 @@ Invoke before starting this workflow:
    git worktree add -b feat-<slug> .claude/worktrees/feat-<slug> origin/main
    ```
 
+   **Keep the checkout clean without committing anything**: the worktree directory would otherwise
+   show as untracked in the main checkout. Add it to the repository's *local* exclude file, never to
+   `.gitignore`:
+   ```sh
+   grep -qxF '.claude/worktrees/' "$(git rev-parse --git-common-dir)/info/exclude" 2>/dev/null \
+     || printf '.claude/worktrees/\n' >> "$(git rev-parse --git-common-dir)/info/exclude"
+   ```
+
    **Then check the branch name** — `EnterWorktree` may name it `worktree-<name>`, which is not the convention. If it did, rename it from inside the worktree: `git branch -m feat-<slug>`. The branch name is load-bearing: a spec's `## Delivery` ledger binds the delivery unit to a branch name in backticks, the delivery loop builds the branch that line names, and `/archive-spec` stops and asks when the current branch matches no unit.
 5. **Report** the branch name, worktree path, and the correct next steps.
 

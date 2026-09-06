@@ -25,33 +25,33 @@ check() {
 }
 
 # A sandbox copy, so the developer's own credentials are never touched by a test run.
-mkdir -p "$TMP/.loop" && git init -q "$TMP"
-cp "$WIZ" "$TMP/.loop/"
-cp loop/loop.env.dist "$TMP/.loop/"
+# The settings file is the user's, wherever LOOP_ENV points; the sandbox copy is under $TMP.
+export LOOP_ENV="$TMP/config/loop.env"
 
 set +e
-( cd "$TMP" && ./.loop/setup-loop.sh --show ) > "$TMP/out" 2>&1
+"$WIZ" --show > "$TMP/out" 2>&1
 check "--show on an unconfigured repo explains itself" \
   "$(grep -c 'Run: ' "$TMP/out")" "1"
 
 # Not a terminal: the wizard must say so rather than hang or half-write a file.
-( cd "$TMP" && ./.loop/setup-loop.sh < /dev/null ) > "$TMP/out" 2>&1
+"$WIZ" < /dev/null > "$TMP/out" 2>&1
 check "a non-interactive run refuses" "$?" "3"
 set -e
 check "and it names the manual path" "$(grep -c 'by hand' "$TMP/out")" "1"
 
 # Everything below exercises the file the wizard writes, which is the part with a failure mode.
-cat > "$TMP/.loop/loop.env" <<'ENV'
+mkdir -p "$(dirname "$LOOP_ENV")"
+cat > "$LOOP_ENV" <<'ENV'
 # a comment that must survive
 CLAUDE_CODE_OAUTH_TOKEN=
 GH_TOKEN=github_pat_abc==/+xyz
 LOOP_SANDBOX=1
 MAX_UNITS=3
 ENV
-chmod 600 "$TMP/.loop/loop.env"
+chmod 600 "$LOOP_ENV"
 
 set +e
-( cd "$TMP" && ./.loop/setup-loop.sh --show ) > "$TMP/out" 2>&1
+"$WIZ" --show > "$TMP/out" 2>&1
 set -e
 check "--show reports an empty key as EMPTY" "$(grep -c 'CLAUDE_CODE_OAUTH_TOKEN *EMPTY' "$TMP/out")" "1"
 check "--show reports a filled key as set"   "$(grep -c 'GH_TOKEN *set' "$TMP/out")" "1"
@@ -61,12 +61,12 @@ check "--show never prints a secret" "$(grep -c 'github_pat' "$TMP/out")" "0"
 
 # A GitHub PAT can contain '=', '+' and '/'. A rewrite that split on '=' and rejoined would corrupt
 # it, and the failure would surface far from here as an unexplained 401.
-stored="$(awk -F= '$1 == "GH_TOKEN" { print substr($0, length("GH_TOKEN") + 2) }' "$TMP/.loop/loop.env")"
+stored="$(awk -F= '$1 == "GH_TOKEN" { print substr($0, length("GH_TOKEN") + 2) }' "$LOOP_ENV")"
 check "a token containing = + / is stored verbatim" "$stored" "github_pat_abc==/+xyz"
 
 check "the file the wizard maintains is 0600" \
-  "$(stat -c '%a' "$TMP/.loop/loop.env" 2>/dev/null \
-     || stat -f '%Lp' "$TMP/.loop/loop.env")" "600"
+  "$(stat -c '%a' "$LOOP_ENV" 2>/dev/null \
+     || stat -f '%Lp' "$LOOP_ENV")" "600"
 
 check "the committed template carries no value" \
   "$(grep -cE '^(CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN)=.+' loop/loop.env.dist)" "0"

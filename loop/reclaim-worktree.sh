@@ -28,8 +28,11 @@ case "$MODE" in
   *) echo "reclaim-worktree: unknown option '$MODE' (expected --dry-run)" >&2; exit 2 ;;
 esac
 
-LOOP_DIR="$(cd "$(dirname "$0")" && pwd -P)"
-cd "$(git -C "$LOOP_DIR" rev-parse --show-toplevel)"
+# The repository is the one this is run from; the script itself lives in the plugin, outside any.
+if ! cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null; then
+  echo "reclaim-worktree: run this from inside the repository that owns the worktree." >&2
+  exit 3
+fi
 
 LOOP_CLEAN_WORKTREE="${LOOP_CLEAN_WORKTREE:-}"
 

@@ -7,7 +7,7 @@ gates, its own `/code-review`. A spec declares its units as the checklist in its
 What keeps a session small is the phase it is given, not the size of the PR: the delivery loop runs
 one fresh session per phase, and `/implement-spec` dispatches one fresh implementer per phase.
 
-**Nothing gates on size.** `.loop/unit-size.sh` reports and always exits 0. `est ~N` in a ledger line
+**Nothing gates on size.** `<loop>/unit-size.sh` reports and always exits 0. `est ~N` in a ledger line
 is kept beside the realised figure so estimates stay comparable; it bounds nothing.
 
 ## When a spec needs more than one unit

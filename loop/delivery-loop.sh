@@ -17,8 +17,9 @@
 # derives it from the repository's own docs every time a spec is written, and the human approves it
 # with the rest of the spec. Nothing about the host is configured in a file for this loop's sake.
 #
-# Settings are environment variables, read from the gitignored `.loop/loop.env` (see loop.env.dist):
-# the sandbox tokens and per-developer knobs. The shell wins over the file. The main ones:
+# Settings are environment variables, read from the user's `~/.config/engineering-loop/loop.env` (see
+# loop.env.dist): the sandbox tokens and per-developer knobs. The shell wins over the file. The main
+# ones:
 #
 #   LOOP_MODEL=opus                   the model of every build session; the PR session runs on sonnet.
 #   MAX_SESSIONS=<phases>+4           sessions per invocation before the unit is declared non-converging.
@@ -31,8 +32,8 @@
 #
 # A STOP KEEPS ITS WORKTREE. Only the done path reclaims -- after the unit is proved, its PR is open
 # and its tick is recorded. Every other exit leaves the worktree, because the interrupted session's
-# work is only in there. Drop one by hand with `.loop/reclaim-worktree.sh <path>`; the run names the
-# path on its way out. The RECORD of the session in flight is kept by fewer exits than the worktree
+# work is only in there. Drop one by hand with the plugin's `reclaim-worktree.sh <path>`; the run
+# names both on its way out. The RECORD of the session in flight is kept by fewer exits than the worktree
 # is: a session that wrote its own `ESCALATE:` had its say, so its record goes and the re-run builds
 # that phase fresh in the tree it left.
 #
@@ -41,9 +42,9 @@
 # path -- the driver was there before the run and outlives it. Run it from a main checkout and it
 # creates `.claude/worktrees/<branch>`. While a run is in flight the worktree is the loop's: a
 # session commits with `git add -A` unless it was told it inherited a predecessor's tree, so an edit
-# made in it mid-run is swept into the unit. The loop's own state -- the lock and the unit
-# directories -- hangs off the MAIN checkout's .loop/state rather than the driver's; loop.env is read
-# from the driver first and the main checkout second, first writer winning.
+# made in it mid-run is swept into the unit. The loop's own state -- the lock, the unit directories,
+# the worktrees it creates, the telemetry -- lives under the user's state directory, keyed by the
+# repository; nothing of it is written into the repository.
 #
 # ONE LOOP PER UNIT, SEVERAL PER REPOSITORY. The lock is `lock/<branch>/`, so two specs build side
 # by side from two shells; everything else a run writes is keyed by branch, bar `.git/config`, which
@@ -90,18 +91,20 @@ if [ -z "$SPEC" ]; then
   exit 2
 fi
 
-# The engine lives in <repo>/.loop/. The root is resolved through git so the engine can be vendored
-# anywhere a host puts it.
+# The engine is a Claude Code plugin: these scripts live under the plugin's directory, not in any
+# repository. The repository is the one the loop is run FROM, so nothing of the engine is committed
+# into a host -- the host writes its specs, and only its specs.
 LOOP_DIR="$(cd "$(dirname "${DELIVERY_LOOP_ORIGIN:-$0}")" && pwd -P)"
-cd "$(git -C "$LOOP_DIR" rev-parse --show-toplevel)"
+PLUGIN_ROOT="$(cd "$LOOP_DIR/.." && pwd -P)"
+if ! ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  echo "delivery-loop: run this from inside the repository to build; the current directory is not in one" >&2
+  exit 2
+fi
+cd "$ROOT"
 ROOT="$(pwd -P)"
 
-# The main checkout, which is where the loop's own state lives -- not the tree it is driven from.
-# Driven in place, ROOT is a linked worktree, and everything keyed to it would move with the driver:
-# loop.env (gitignored, so a worktree never has one -- the tokens and LOOP_SANDBOX=1 would silently
-# revert to their defaults), the lock (two drivers of one unit would take two different locks), and
-# the unit directory (transcripts, which a gate then bind-mounts into a container as part of the
-# built tree). All three are properties of the repository, so all three hang off the main checkout.
+# The main checkout identifies the repository, whichever of its worktrees the loop is driven from:
+# the lock and the unit directories are keyed by it, so two drivers of one unit meet the same lock.
 # `git worktree list` names the main worktree on its first line whatever the git directory is called;
 # stripping `/.git` off the common dir fails silently under --separate-git-dir or a symlinked .git.
 MAIN_ROOT="$ROOT"
@@ -118,11 +121,10 @@ esac
 
 # ---------------------------------------------------------------------------- configuration file
 #
-# `.loop/loop.env` is gitignored and personal: the two sandbox credentials and per-developer knobs.
-# A value already exported in the shell is never overwritten, so `LOOP_MODEL=sonnet
-# .loop/delivery-loop.sh …` still works. It is read from the driver first, then the main checkout,
-# first writer winning: a worktree the loop is driven from has none of its own, and without the
-# second read an in-place run would find no settings at all.
+# The settings file is the user's, outside every repository: `~/.config/engineering-loop/loop.env`
+# (LOOP_ENV overrides the path). It holds the two sandbox credentials and per-developer knobs, and
+# nothing about any host. A value already exported in the shell is never overwritten, so
+# `LOOP_MODEL=sonnet delivery-loop.sh …` still works.
 #
 # `secret` marks a file that holds tokens and should not be readable beyond its owner.
 load_env_file() {
@@ -153,8 +155,8 @@ load_env_file() {
 LOOP_GATES_FROM=""
 [ -z "${LOOP_GATES:-}" ] || LOOP_GATES_FROM="the shell"
 
-load_env_file "$LOOP_DIR/loop.env" secret
-[ "$MAIN_ROOT" = "$ROOT" ] || load_env_file "$MAIN_ROOT/.loop/loop.env" secret
+LOOP_ENV="${LOOP_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env}"
+load_env_file "$LOOP_ENV" secret
 
 # A session is one phase, and that is what bounds its context. A session cannot observe its own
 # token count, so a budget in the prompt is not obeyed; a phase is observable from outside. The loop
@@ -172,7 +174,13 @@ MAX_SESSIONS="${MAX_SESSIONS:-}"
 
 UNIT_TIMEOUT="${UNIT_TIMEOUT:-7200}"
 
-STATE_DIR="$MAIN_ROOT/.loop/state"
+# The loop's state lives under the user's state directory, keyed by the repository: its main
+# checkout's basename plus a checksum of that path, so two clones of one project on one machine do
+# not share a lock or a worktree. Nothing of it is written into the repository. LOOP_STATE_DIR names
+# the per-repository directory outright, which is what the harness uses.
+STATE_DIR="${LOOP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/engineering-loop/$(basename "$MAIN_ROOT")-$(printf '%s' "$MAIN_ROOT" | cksum | cut -d' ' -f1)}"
+mkdir -p "$STATE_DIR"
+STATE_DIR="$(cd "$STATE_DIR" && pwd -P)"
 LOCK="$STATE_DIR/lock"
 # This run's own lock, `$LOCK/<branch>`, set by acquire_lock. Empty until then, and `teardown` reads
 # it rather than recomputing it from BRANCH: an empty BRANCH would spell `$LOCK//pid`, which is the
@@ -180,7 +188,9 @@ LOCK="$STATE_DIR/lock"
 LOCK_DIR=""
 LEDGER="$STATE_DIR/ledger.$$"
 PHASES="$STATE_DIR/phases.$$"
-WORKTREES="$MAIN_ROOT/.claude/worktrees"
+# A worktree the loop creates lives beside its state, outside the repository; a worktree the loop is
+# driven from is wherever the human put it.
+WORKTREES="$STATE_DIR/worktrees"
 RUN_ID="$$-$(date +%s)"
 
 # Where this unit is built. Normally a worktree of its own under `.claude/worktrees/<branch>`; when
@@ -219,6 +229,15 @@ CONTAINER_N=0
 
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 LOOP_SANDBOX="${LOOP_SANDBOX:-0}"
+
+# The container has no plugins of its own, so a sandboxed session is handed this plugin and, when the
+# host has it installed, superpowers, through `--plugin-dir`. On the host the session inherits the
+# user's own installs and needs neither.
+SUPERPOWERS_DIR=""
+for __sp in "$HOME"/.claude/plugins/cache/*/superpowers/*/; do
+  [ -d "$__sp" ] && SUPERPOWERS_DIR="${__sp%/}"
+done
+unset __sp
 LOOP_IMAGE="${LOOP_IMAGE:-engineering-loop:local}"
 
 # Resolved by pre-flight from inside a container; empty when the sandbox is off.
@@ -336,6 +355,14 @@ unticked_phases() {
 
 # ---------------------------------------------------------------------------- pre-flight
 
+exclude_locally() {
+  local common_dir
+  common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  [ -n "$common_dir" ] || return 0
+  mkdir -p "$common_dir/info"
+  grep -qxF -- "$1" "$common_dir/info/exclude" 2>/dev/null || printf '%s\n' "$1" >> "$common_dir/info/exclude"
+}
+
 # The loop builds where it is driven from. A linked worktree already on the unit's branch IS the
 # unit: the spec was written in it, the branch is checked out in it, and a second worktree of the
 # same branch would only split the work across two trees git will not let both hold. So in place the
@@ -371,7 +398,10 @@ preflight() {
     return 1
   fi
 
-  mkdir -p "$STATE_DIR"
+  # The one thing the loop writes into a repository that is not the human's own work: a line in the
+  # LOCAL, uncommitted exclude file, so the worktrees /new-feature creates under .claude/worktrees/
+  # do not show as untracked in the main checkout and trip the dirty-tree refusal.
+  exclude_locally ".claude/worktrees/"
 
   # One unit, read from the ledger, parsed once. The run fails if the ledger does not parse: a
   # malformed ledger read as an empty list would end "built nothing", exit 0, which is the worst
@@ -512,7 +542,7 @@ preflight() {
       # `inspect`, not `docker images`: inspect says whether the tag can be run. A manifest list is
       # listed by `docker images` and cannot be resolved here.
       warn "sandbox image $LOOP_IMAGE is absent, or present but not resolvable by tag (a manifest"
-      warn "list rather than a runnable image). Either way:  .loop/sandbox/build.sh"
+      warn "list rather than a runnable image). Either way:  $LOOP_DIR/sandbox/build.sh"
       missing=$sandbox_fatal
     fi
     if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
@@ -546,7 +576,7 @@ preflight() {
       else
         warn "the sandbox image has no buildx, so any gate running docker compose up --build dies on"
         warn "\"the --mount option requires BuildKit\" -- naming neither buildx nor the compose file."
-        warn "Rebuild it:  .loop/sandbox/build.sh"
+        warn "Rebuild it:  $LOOP_DIR/sandbox/build.sh"
         missing=$sandbox_fatal
       fi
 
@@ -882,8 +912,8 @@ kept_worktrees() {
     # Never the tree this loop is running in. In place that tree is the unit, and reclaim-worktree.sh
     # would drop the driver, the branch's only checkout and the run itself.
     [ "$wt" != "$ROOT" ] || continue
-    printf '  %s — %s — drop it with: .loop/reclaim-worktree.sh %s\n' \
-      "$wt" "$(record_field phase "$rec")" "$wt"
+    printf '  %s — %s — drop it with: %s/reclaim-worktree.sh %s\n' \
+      "$wt" "$(record_field phase "$rec")" "$LOOP_DIR" "$wt"
   done
 }
 
@@ -896,7 +926,7 @@ unit_tree_advice() {
   if [ "$IN_PLACE" = 1 ]; then
     printf 'resolve it in %s — that is your own worktree, not one the loop made' "$UNIT_WT"
   else
-    printf 'reclaim %s by hand with .loop/reclaim-worktree.sh %s' "$UNIT_WT" "$UNIT_WT"
+    printf 'reclaim %s by hand with %s/reclaim-worktree.sh %s' "$UNIT_WT" "$LOOP_DIR" "$UNIT_WT"
   fi
 }
 
@@ -905,8 +935,8 @@ kept_worktree_note() {
   [ "$IN_PLACE" = 0 ] || return 0
   [ -d "$wt" ] || return 0
   phase="$(record_field phase)"
-  printf 'worktree kept at %s; the next run resumes %s — reclaim by hand with .loop/reclaim-worktree.sh %s' \
-    "$wt" "${phase:-the first unticked phase}" "$wt"
+  printf 'worktree kept at %s; the next run resumes %s — reclaim by hand with %s/reclaim-worktree.sh %s' \
+    "$wt" "${phase:-the first unticked phase}" "$LOOP_DIR" "$wt"
 }
 
 # ---------------------------------------------------------------------------- the resume decision
@@ -1563,6 +1593,8 @@ run_claude_sandboxed() {
     -v "$GIT_COMMON:$GIT_COMMON" \
     -v "$UNIT_DIR:$UNIT_DIR" \
     -v "$UNIT_DIR/claude-config:/loop-config" \
+    -v "$PLUGIN_ROOT:$PLUGIN_ROOT:ro" \
+    ${SUPERPOWERS_DIR:+-v "$SUPERPOWERS_DIR:$SUPERPOWERS_DIR:ro"} \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -w "$wt" \
     -e CLAUDE_CODE_OAUTH_TOKEN -e ANTHROPIC_API_KEY -e GH_TOKEN \
@@ -1570,6 +1602,8 @@ run_claude_sandboxed() {
     "$LOOP_IMAGE" \
       -p "$prompt" \
       --model "$model" \
+      --plugin-dir "$PLUGIN_ROOT" \
+      ${SUPERPOWERS_DIR:+--plugin-dir "$SUPERPOWERS_DIR"} \
       ${SESSION_ID:+--session-id "$SESSION_ID"} \
       ${RESUME_ID:+--resume "$RESUME_ID"} \
       --output-format json \
@@ -1849,29 +1883,30 @@ unit_is_ticked() {
 # PR exists; `record_unit` then rewrites that line with the measurements and the PR number. So the
 # question is whether the line carries its measurement, and whether the telemetry file exists.
 unit_is_recorded() {
-  local tmp rc=1 slug telem
+  local tmp rc=1
   tmp="$(ledger_of_branch)"
   grep -qE "^- \\[[xX]\\][[:space:]]+\\*\\*$UNIT\\*\\*.* → [0-9]+ lines" "$tmp" && rc=0
   rm -f "$tmp"
   [ "$rc" = 0 ] || return 1
+  # The telemetry is written once before the PR, for its body, and again after it with the number.
+  # Only the second write is the record; the first must not read as "already recorded".
+  grep -q '^| PR | #' "$(telemetry_file)" 2>/dev/null
+}
 
-  slug="$(basename "$SPEC" .md)"
-  telem=".ai/telemetry/$slug/$(printf '%s' "$UNIT" | tr ' /' '--').md"
-  git cat-file -e "$BRANCH:$telem" 2>/dev/null && return 0
-  git cat-file -e "origin/$BRANCH:$telem" 2>/dev/null && return 0
-  return 1
+# The telemetry is the loop's record, kept beside its state and summarised in the PR body: a host
+# repository does not carry a file for the engine's sake.
+telemetry_file() {
+  printf '%s/telemetry/%s/%s.md' "$STATE_DIR" "$(basename "$SPEC" .md)" "$(printf '%s' "$UNIT" | tr ' /' '--')"
 }
 
 # What a unit cost to build, one row per session. Context is what a session costs, and recording
 # each session's peak beside the alarm is what shows which phase was cut too large.
 record_telemetry() {
-  local pr_number="$1" wt="$2" measured="$3"
-  local dir slug file json rows=""
+  local pr_number="$1" measured="$2"
+  local file json rows=""
 
-  slug="$(basename "$SPEC" .md)"
-  dir="$wt/.ai/telemetry/$slug"
-  mkdir -p "$dir"
-  file="$dir/$(printf '%s' "$UNIT" | tr ' /' '--').md"
+  file="$(telemetry_file)"
+  mkdir -p "$(dirname "$file")"
 
   # Session files are named so a lexical glob is chronological across runs.
   for json in "$STATE_DIR/$BRANCH".s*.json; do
@@ -1925,7 +1960,7 @@ record_unit() {
   line="$measured"
   [ -n "$pr_number" ] && line="$line (#$pr_number)"
 
-  record_telemetry "$pr_number" "$wt" "$measured"
+  record_telemetry "$pr_number" "$measured"
 
   spec_in_wt="$SPEC"
   [ -f "$wt/$SPEC" ] || spec_in_wt="$(archived_spec)"
@@ -1944,7 +1979,7 @@ record_unit() {
         { print }
       ' "$spec_in_wt" > "$spec_in_wt.tmp" \
     && mv "$spec_in_wt.tmp" "$spec_in_wt" \
-    && git add "$spec_in_wt" .ai/telemetry \
+    && git add "$spec_in_wt" \
     && git commit -q -m "docs(ai): tick $UNIT with its measured size" \
     && git push -q origin "$BRANCH" ) || { escalate "$UNIT" "could not record the tick"; return 1; }
   return 0
@@ -2177,9 +2212,14 @@ if [ "$UNIT_OK" = 1 ] && prove_unit; then
     # An id of its own, and no record: nothing about a session that reads a diff and fills in a
     # template is worth resuming, and reusing the last session's id would have the CLI refuse.
     mint_session_id
+    # The telemetry is written before the PR so its table can go in the PR body -- the repository
+    # carries no telemetry file -- and rewritten afterwards with the PR number.
+    record_telemetry "" "$( cd "$UNIT_WT" && "$LOOP_DIR/unit-size.sh" origin/main || true )"
     run_claude "$UNIT_WT" \
       "Run /open-pr with --base main. This branch carries the whole delivery unit $UNIT of $SPEC, one
-commit per phase. Title it: <type>(<scope>): <the feature>. Do not list the phases in the title." \
+commit per phase. Title it: <type>(<scope>): <the feature>. Do not list the phases in the title.
+The per-session telemetry of this unit is the markdown table in $(telemetry_file); put it in the
+PR body under a '## Sessions' heading, as it is." \
       "$STATE_DIR/$BRANCH.pr.json" "$PR_MODEL" || escalate "$UNIT" "/open-pr failed"
     # One probe answers both questions: is there a PR, and what is its number.
     PR_STATE="$(probe_run "$BRANCH")"

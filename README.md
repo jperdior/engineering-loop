@@ -17,17 +17,23 @@ the PR. Nothing merges itself.
 
 ## Install
 
-From the root of the repository you want to build in:
+In Claude Code:
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/jperdior/engineering-loop/main/install.sh | bash
+```
+/plugin marketplace add jperdior/engineering-loop
+/plugin install engineering-loop@engineering-loop
+/plugin install superpowers@claude-plugins-official
 ```
 
-It vendors the loop into `.loop/`, links the skills into `.claude/skills/`, adds the loop's runtime
-paths to `.gitignore`, and installs the [superpowers](https://github.com/obra/superpowers) plugin if
-it is missing. Commit `.loop/`, `.claude/skills/` and `.gitignore`. Re-run it to update.
+That is the whole install. **Nothing is written into your repository**: the skills and the loop
+live in the plugin, your settings in `~/.config/engineering-loop/loop.env`, the loop's state in
+`~/.local/state/engineering-loop/`. The only files the engine ever adds to a repository are the specs
+you approve, which ship in the PR they describe.
 
-You need `git`, `jq`, GNU `timeout` (`brew install coreutils` on macOS), and an authenticated `gh`.
+The skills invoke a few of [superpowers](https://github.com/obra/superpowers)' (brainstorming,
+test-driven development, parallel subagents); Claude Code plugins cannot declare dependencies, so it
+is installed alongside. You also need `git`, `jq`, GNU `timeout` (`brew install coreutils` on macOS),
+and an authenticated `gh`.
 
 ## Use
 
@@ -44,11 +50,13 @@ phase lands. When the PR is open, **read it and merge it.**
 The loop runs until the feature is built and survives closing the chat. It stops on its own for a
 usage limit, which it resumes from when you run it again, and for an escalation, which it explains.
 
-Prefer a terminal for an overnight run over SSH? From the feature's worktree:
+Prefer a terminal for an overnight run over SSH? The loop is a script inside the plugin; from the
+feature's worktree:
 
 ```sh
-.loop/delivery-loop.sh .ai/specs/<file>.md --dry-run   # the plan; creates nothing
-.loop/delivery-loop.sh .ai/specs/<file>.md             # build it
+LOOP=~/.claude/plugins/cache/engineering-loop/engineering-loop/*/loop
+$LOOP/delivery-loop.sh .ai/specs/<file>.md --dry-run   # the plan; creates nothing
+$LOOP/delivery-loop.sh .ai/specs/<file>.md             # build it
 ```
 
 ## What your repository needs
@@ -80,20 +88,23 @@ An `AGENTS.md` (or `CLAUDE.md`) that says three things. The loop reads it; you c
 |---|---|---|
 | 0 | done; the PR is open | review the PR |
 | 3 | pre-flight refused: a dirty tree, a tree behind its upstream, a spec without gates, a missing tool | fix it, re-run |
-| 4 | escalation: something is wrong and the loop will not guess | read `.loop/state/<branch>.json` and the worktree |
+| 4 | escalation: something is wrong and the loop will not guess | read the last session's result under `~/.local/state/engineering-loop/`, and the worktree |
 | 5 | paused: the account's usage limit | re-run once it resets; the interrupted session continues |
 
 A stop keeps the worktree and the half-built phase in it. Only a finished unit reclaims a worktree
-the loop created; a worktree you were already in is never touched.
+the loop created; a worktree you were already in is never touched. The last session's full result
+is in `~/.local/state/engineering-loop/<repo>/<branch>.json`.
 
 ## Settings
 
-Personal settings live in the gitignored `.loop/loop.env`; a value exported in the shell wins.
+Personal settings live in `~/.config/engineering-loop/loop.env`, one file for every repository;
+`setup-loop.sh` in the plugin writes the two sandbox tokens into it. A value exported in the shell
+wins.
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `LOOP_MODEL` | `opus` | the model of every build session; the PR session runs on `sonnet` |
-| `LOOP_SANDBOX` | `0` | `1` runs each session in a container with no host credentials; needs `.loop/setup-loop.sh` for the two tokens and `.loop/sandbox/build.sh` for the image |
+| `LOOP_SANDBOX` | `0` | `1` runs each session in a container with no host credentials; needs `setup-loop.sh` for the two tokens and `sandbox/build.sh` for the image, both in the plugin's `loop/` |
 | `MAX_SESSIONS` | phases + 4 | sessions per run before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
 | `SESSION_CONTEXT_ALARM` | `150000` | peak context above which a phase is reported as cut too large |

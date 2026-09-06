@@ -5,6 +5,9 @@ description: Tick the current branch's unit in a spec's Delivery ledger and move
 
 # Archive Spec
 
+> **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
+> (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+
 Decide whether the branch about to become a PR is the spec's **last** delivery unit, and archive the
 spec into `.ai/specs/implemented/` when — and only when — it is.
 
@@ -27,7 +30,7 @@ deployment seam forces a second:
 - `- [ ]` — the unit is still owed.
 
 A unit's backticked name — the one directly after its `**PR N**` label — is its branch, and that is
-what binds a unit to a branch. Read it, never guess it. `.loop/parse-ledger.sh` applies this rule,
+what binds a unit to a branch. Read it, never guess it. `<loop>/parse-ledger.sh` applies this rule,
 which is why the steps below call it rather than matching backticks by hand.
 
 ## Workflow
@@ -45,7 +48,7 @@ which is why the steps below call it rather than matching backticks by hand.
 
 3. **Read the ledger.** Extract the units:
    ```sh
-   .loop/parse-ledger.sh "$SPEC"        # done|unit|branch, one row per unit
+   <loop>/parse-ledger.sh "$SPEC"        # done|unit|branch, one row per unit
    ```
    **Exit 3** means the ledger is malformed or the spec has no `## Delivery` section. Do not assume it
    is single-unit. Stop and ask the user how many delivery units the spec has, add the ledger, and
@@ -58,12 +61,12 @@ which is why the steps below call it rather than matching backticks by hand.
      delivery unit of this spec. Never invent a unit and never tick an arbitrary one.
 
    Write the tick as `- [x] … — est ~N`, leaving the estimate in place. The delivery loop rewrites
-   that same line afterwards with the realised measurements from `.loop/unit-size.sh` and the PR
+   that same line afterwards with the realised measurements from `<loop>/unit-size.sh` and the PR
    number; it replaces everything after the ` → `, so do not add measurements by hand.
 
 5. **Count what is left.**
    ```sh
-   .loop/parse-ledger.sh "$SPEC" | grep -c '^ |' || true
+   <loop>/parse-ledger.sh "$SPEC" | grep -c '^ |' || true
    ```
    - **Greater than zero → do not archive.** Commit the ticked ledger, report the units still owed, and
      stop. The spec stays in `.ai/specs/` where the next branch will find it.

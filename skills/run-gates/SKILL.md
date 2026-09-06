@@ -5,6 +5,9 @@ description: Run the host repository's verification gate — read the gate comma
 
 # Run the Verification Gate
 
+> **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
+> (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+
 The single source of truth for running the host repository's gate. Other skills
 (`implement-spec`, `code-review`, `open-pr`) invoke this rather than naming commands
 themselves.
@@ -29,7 +32,7 @@ current branch. Read the list with the parser, one command per line, each run **
 repository root**, in order:
 
 ```sh
-.loop/parse-ledger.sh <spec-file> --gates
+<loop>/parse-ledger.sh <spec-file> --gates
 ```
 
 Nothing here rewrites, narrows or re-orders a command: a gate is run exactly as the spec wrote it.

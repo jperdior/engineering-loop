@@ -5,6 +5,9 @@ description: Implement an approved spec from .ai/specs/, phase by phase, on the 
 
 # Implement Spec
 
+> **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
+> (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+
 Execute an approved spec under `.ai/specs/{date}-{slug}.md`. This skill is an **overlay on
 `superpowers:subagent-driven-development` (SDD)**: SDD owns the execution *machinery*
 (per-task fresh implementer, ledger, review package, fix loop); this skill owns the *mapping* —
@@ -27,7 +30,7 @@ both paths.
 
 A spec is one **delivery unit** — one branch, one PR — named by the checklist line in its
 `## Delivery` section, and its **phases are the tasks**, listed as the checklist that opens
-`## Progress`. `.loop/parse-ledger.sh` reads both.
+`## Progress`. `<loop>/parse-ledger.sh` reads both.
 
 Each phase is built with **zero inherited session context**: interactively by a fresh
 implementer subagent briefed from the phase text plus the interfaces earlier phases produced,
@@ -85,8 +88,8 @@ If any precondition fails, stop and inform the user — under the loop, write
    redo their work or contradict it.
 3. **Resolve this run's unit and phases:**
    ```sh
-   .loop/parse-ledger.sh <spec-file>            # done|unit|branch
-   .loop/parse-ledger.sh <spec-file> --phases   # done|phase|title
+   <loop>/parse-ledger.sh <spec-file>            # done|unit|branch
+   <loop>/parse-ledger.sh <spec-file> --phases   # done|phase|title
    ```
    Exit 3 means a section is malformed or absent — a failed precondition, not something to work
    around. The unit whose **`branch` field** equals the current branch is this run's scope; a
@@ -96,7 +99,7 @@ If any precondition fails, stop and inform the user — under the loop, write
    code this spec touches. They are the build rules — this skill does not restate them. The
    host's **skills** the phase must use are named in the phase's own section:
    ```sh
-   .loop/parse-ledger.sh <spec-file> --skills "Phase N"   # one host skill per line
+   <loop>/parse-ledger.sh <spec-file> --skills "Phase N"   # one host skill per line
    ```
    Under the loop the prompt repeats them as a `Skills:` line.
 5. Interactively: resolve the SDD workspace with `scripts/sdd-workspace <spec-file>` and check
@@ -213,7 +216,7 @@ fresh session and the prompt names the step; run only that step, push, and write
 ## Cleanup — after the PR merges
 
 - Exit the worktree (`ExitWorktree` tool if available, otherwise `cd` to the main repo root).
-- `.loop/reclaim-worktree.sh .claude/worktrees/<name>` from the main repo — it removes the
+- `<loop>/reclaim-worktree.sh .claude/worktrees/<name>` from the main repo — it removes the
   worktree and prunes.
 - `git branch -d feat-<slug>`.
 - The SDD workspace (`.superpowers/sdd/<spec-basename>/`) is git-ignored scratch; delete it once
@@ -253,7 +256,7 @@ After all phases:
 
    Cleanup after merge:
    1. Exit worktree
-   2. .loop/reclaim-worktree.sh .claude/worktrees/<name>
+   2. <loop>/reclaim-worktree.sh .claude/worktrees/<name>
    3. git branch -d feat-<slug>
 ```
 
