@@ -1,6 +1,6 @@
 ---
 name: spec-writing
-description: Draft or review architectural specs under .ai/specs/. Use when starting a new feature or any change touching multiple files. Adopts a "staff engineer" reviewer lens and holds the spec to the host repository's own conventions.
+description: "Draft or review architectural specs under .ai/specs/. Use when starting a new feature or any change touching multiple files. Adopts a \"staff engineer\" reviewer lens and holds the spec to the host repository's own conventions."
 ---
 
 # Spec Writing & Review

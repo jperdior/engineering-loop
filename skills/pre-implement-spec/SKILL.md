@@ -1,6 +1,6 @@
 ---
 name: pre-implement-spec
-description: Audit a spec before implementation. Produce a readiness report — gap analysis, backward-compatibility impact, risk assessment, missing tests. Triggers on "pre-implement", "analyze spec", "spec readiness", "spec gap analysis".
+description: "Audit a spec before implementation. Produce a readiness report — gap analysis, backward-compatibility impact, risk assessment, missing tests. Triggers on \"pre-implement\", \"analyze spec\", \"spec readiness\", \"spec gap analysis\"."
 ---
 
 # Pre-Implement Spec

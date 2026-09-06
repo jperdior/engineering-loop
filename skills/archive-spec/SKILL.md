@@ -1,6 +1,6 @@
 ---
 name: archive-spec
-description: Tick the current branch's unit in a spec's Delivery ledger and move the spec to .ai/specs/implemented/ only when no unit is left unticked. Triggers on "archive spec", "archive the spec", "is this the last PR of the spec".
+description: "Tick the current branch's unit in a spec's Delivery ledger and move the spec to .ai/specs/implemented/ only when no unit is left unticked. Triggers on \"archive spec\", \"archive the spec\", \"is this the last PR of the spec\"."
 ---
 
 # Archive Spec

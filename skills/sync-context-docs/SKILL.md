@@ -1,6 +1,6 @@
 ---
 name: sync-context-docs
-description: Update or create the AGENTS.md nearest to every directory the branch touched, so the docs describe the code as it now is. Reads from code — never from memory. Run before opening a PR. Triggers on "sync docs", "update context docs", "sync context docs", "update agents".
+description: "Update or create the AGENTS.md nearest to every directory the branch touched, so the docs describe the code as it now is. Reads from code — never from memory. Run before opening a PR. Triggers on \"sync docs\", \"update context docs\", \"sync context docs\", \"update agents\"."
 ---
 
 # Sync Context Docs
