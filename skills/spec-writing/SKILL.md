@@ -23,7 +23,7 @@ Invoke before starting this workflow:
 - `superpowers:writing-plans` — after the spec is finalised, structure it into a concrete implementation plan with bite-sized tasks.
 
 For research-heavy specs (a new module, a cross-cutting concern), spawn an Explore agent before
-step 5 to benchmark the design against the patterns the host repository already uses — return a gap
+step 6 to benchmark the design against the patterns the host repository already uses — return a gap
 analysis and 2-3 alternative designs with trade-offs.
 
 ## Workflow
@@ -33,17 +33,37 @@ analysis and 2-3 alternative designs with trade-offs.
    Do not create any file, do not read context, do not proceed until the branch is a `feat-*` branch.
 1. **Load context**: read the task description, then the host's root `AGENTS.md` / `CLAUDE.md` and the nearest one to each area the change touches. Identify which modules, packages and apps are affected, and follow every pointer those files give. A spec that silently contradicts a rule the host has written down is a **Critical** finding.
 
-   Then read **the host's skill index** — the skills this repository has written for building in it, which the phases will name (step 7). It is, in order of preference:
+   Then read **the host's skill index** — the skills this repository has written for building in it, which the phases will name (step 8). It is, in order of preference:
    - the router or index table in the root `AGENTS.md` / `CLAUDE.md` that maps kinds of task to `SKILL.md` files, when the host keeps one;
    - otherwise the `description:` line of every `.claude/skills/*/SKILL.md`.
 
    The engine's own skills — `ship`, `spec-writing`, `pre-implement-spec`, `implement-spec`, `run-gates`, `code-review`, `sync-context-docs`, `archive-spec`, `new-feature`, `open-pr` — are the process and are never part of the index. What the index holds is the host's: how it scaffolds a module, adds an endpoint, writes a migration, runs its linters, creates a page, translates a string.
+
+   **A host skill that stands in the way is fixed, never argued around.** When the change the user
+   wants is one a host skill's own steps would refuse or contradict — the skill scaffolds three
+   files and the change needs two, its checklist names a test the change cannot have — the spec
+   does not spend a section justifying the departure. It proposes the one-line change to that
+   `SKILL.md` as the first thing the first phase does, names the skill in that phase's `Skills:`
+   line as usual, and moves on. The host's skill is the host's rule; a spec that reasons its way
+   past one is the finding, not the fix.
 2. **Initialize**: create `.ai/specs/{YYYY-MM-DD}-{kebab-case-title}.md`.
-3. **Start minimal — skeleton + open-questions gate**: write a skeleton (TLDR + 2-3 key sections only). Before writing it, scan the brief for **critical unknowns** — decisions where the wrong assumption forces a rewrite. List them as an **Open Questions** block (`Q1`, `Q2`, …) immediately after the TLDR. **STOP after presenting the skeleton.** Do not proceed past this gate until the user has answered every question.
-4. **Apply answers**: remove the Open Questions block and fill the skeleton.
-5. **Research**: when relevant, compare against open-source leaders, RFCs, or the framework's own recipes. Quote evidence.
-6. **Design**: write the Architecture, Data Models and API Contracts sections. Name, for every unit of state the spec introduces, where it lives and which module owns it; for every endpoint, its route, its auth requirement and the exact JSON shape of its request and response; for every interaction across a boundary the host declares, the mechanism the host permits — never an import the host forbids.
-7. **Phasing and the Delivery ledger**: break delivery into testable phases. Each phase ends with the host's gates green and a working app. Define phases at a granularity that is independently reviewable and leaves the app in a valid state at each checkpoint.
+3. **Size the spec to the change, and say so.** Decide, from the brief and the tree, whether the
+   change is **bounded** — one module, no new contract, table or dependency, one or two phases, the
+   kind of thing a host skill already covers end to end — or **full**. Write the word in the TLDR:
+   `**Size:** bounded` or `**Size:** full`. `/pre-implement-spec` and `/ship` read it.
+
+   A bounded spec is **only** these sections: TLDR, Phasing, Delivery, Progress, Gates, Final
+   Compliance Report. No Overview, Problem Statement, Architecture, Data Models, API Contracts,
+   Frontend Plan, Risks, Integration Coverage, Backward Compatibility or Changelog — omitted, not
+   filled with "N/A", because every line is read by the user at gate 1 and its length is the
+   cost of that gate. A forty-line change with a four-hundred-line spec has failed here whatever
+   else it gets right. A full spec uses the template's sections that apply, and still omits the
+   ones that do not.
+4. **Start minimal — skeleton + open-questions gate**: write a skeleton (TLDR + 2-3 key sections only). Before writing it, scan the brief for **critical unknowns** — decisions where the wrong assumption forces a rewrite. List them as an **Open Questions** block (`Q1`, `Q2`, …) immediately after the TLDR. **STOP after presenting the skeleton.** Do not proceed past this gate until the user has answered every question. A bounded change with no critical unknown has no skeleton step: write it in one pass.
+5. **Apply answers**: remove the Open Questions block and fill the skeleton.
+6. **Research**: when relevant, compare against open-source leaders, RFCs, or the framework's own recipes. Quote evidence.
+7. **Design**: write the Architecture, Data Models and API Contracts sections. Name, for every unit of state the spec introduces, where it lives and which module owns it; for every endpoint, its route, its auth requirement and the exact JSON shape of its request and response; for every interaction across a boundary the host declares, the mechanism the host permits — never an import the host forbids.
+8. **Phasing and the Delivery ledger**: break delivery into testable phases. Each phase ends with the host's gates green and a working app. Define phases at a granularity that is independently reviewable and leaves the app in a valid state at each checkpoint.
 
     Write each phase as its own `### Phase N — title` section under `## Phasing`, and in it **name the
     host's skills the phase must use**, resolved against the skill index read in step 1:
@@ -143,11 +163,11 @@ analysis and 2-3 alternative designs with trade-offs.
     configured in a file for the loop's sake: the contract is re-derived with each spec and approved
     with it, so a change to the host's docs reaches the next feature without anyone editing config.
 
-8. **Risks & Impact**: document concrete failure scenarios (severity, affected area, mitigation, residual risk).
-9. **Integration Coverage**: list the tests that must exist for the new behaviour, in the frameworks and at the paths the host repository already uses.
-10. **Compliance gate**: apply [references/compliance-gate.md](references/compliance-gate.md).
-11. **Output**: finalise the spec. If the host keeps a catalogue of domain rules or lessons, add any new rule the spec introduces to it.
-12. **Commit the spec locally** on the current `feat-<slug>` branch:
+9. **Risks & Impact**: document concrete failure scenarios (severity, affected area, mitigation, residual risk).
+10. **Integration Coverage**: list the tests that must exist for the new behaviour, in the frameworks and at the paths the host repository already uses.
+11. **Compliance gate**: apply [references/compliance-gate.md](references/compliance-gate.md).
+12. **Output**: finalise the spec. If the host keeps a catalogue of domain rules or lessons, add any new rule the spec introduces to it.
+13. **Commit the spec locally** on the current `feat-<slug>` branch:
     - `git add .ai/specs/{file} && git commit -m "spec: {title}"`
     - No spec-only PR is opened, in any flow: the spec is the unit's first commit and travels with the implementation in the same PR, staying in `.ai/specs/` until that PR archives it. Under `/ship` the user reads it here and says OK; that spoken OK is gate 1, and the loop then builds in this same worktree.
     - **Auto-proceed** to `/pre-implement-spec .ai/specs/{file}.md` — the audit runs next. If gaps are found, update the spec and re-audit before coding starts.
@@ -218,6 +238,14 @@ See [references/spec-checklist.md](references/spec-checklist.md).
 12. **Skills by phase**: does each phase's `- **Skills:**` line name the host skills its deliverables
     call for, each resolving to a skill the host has? A deliverable the index has a skill for, with
     no skill named, is **High**; a name that resolves to nothing is **High**.
+13. **Size**: does the TLDR say `bounded` or `full`, and does the spec's length fit the change? A
+    bounded spec carrying sections outside its six, or a spec several times longer than the change
+    it describes, is **High**: the user reads it at gate 1.
+14. **No argued-around host skill**: does the spec explain why it departs from a host skill's steps
+    instead of proposing the one-line fix to that skill? **High**.
+15. **Nothing left to the template**: is any section still the template's placeholder — "(Filled in
+    at the end.)", "{…}", "TBD"? **High**. A section the spec does not need is removed, not left
+    blank.
 
 ## Reference Materials
 

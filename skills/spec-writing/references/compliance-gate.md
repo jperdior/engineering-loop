@@ -26,3 +26,6 @@ a pass.
 | Contracts | Does every endpoint with a body carry an explicit JSON example with exact field names? | Yes. |
 | BC | Is any contract surface removed or renamed without a deprecation bridge? | No. |
 | Open questions | Is the Open Questions block empty or removed? | Yes. A spec with an unanswered question is not ready. |
+| Size | Does the TLDR say `bounded` or `full`, and does the spec carry only the sections that size allows and the change needs? | Yes. A bounded spec is six sections; anything longer than the change warrants is High. |
+| Filled | Is every remaining section written — no template placeholder, no "filled in at the end", no "N/A" body? | Yes. A section the spec does not need is removed. |
+| Host skills | Does the spec propose a fix to any host skill it would otherwise have to depart from, rather than arguing around it? | Yes, or no skill is in the way. |

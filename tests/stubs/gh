@@ -9,12 +9,20 @@
 # loop no positive answer and the merged state stands.
 #
 # LOOP_TEST_GH=fail makes every call exit non-zero, which is how the "a transient gh failure must
-# never be read as 'no PR'" case is exercised.
+# never be read as 'no PR'" case is exercised. LOOP_TEST_GH=norepo fails only `gh api repos/…`:
+# an authenticated token that cannot see this repository, which pre-flight must refuse.
 
 set -euo pipefail
 
 case "${1:-}" in
   auth) exit 0 ;;
+  api)
+    # The repository probe is pre-flight's; `fail` is a failure of the PR reads after pre-flight
+    # passed, so the probe answers even then.
+    case "${2:-}" in
+      repos/*) [ "${LOOP_TEST_GH:-ok}" = "norepo" ] && exit 1; exit 0 ;;
+    esac
+    ;;
 esac
 
 # Only the PR reads fail, so pre-flight still passes and the failure lands where the loop has to

@@ -1,9 +1,16 @@
 # Spec Template
 
+The template is the full set. A **bounded** spec (see `SKILL.md` step 3) keeps only TLDR, Phasing,
+Delivery, Progress, Gates and Final Compliance Report; a full spec keeps the sections that apply.
+Either way, a section that does not apply is removed, and no placeholder below survives into the
+committed spec.
+
 ```markdown
 # {Title}
 
 ## TLDR
+
+**Size:** {bounded | full}
 
 {2-3 sentences. What is this? Why now? What changes?}
 
@@ -163,7 +170,8 @@ _Denials:_ `Bash({command the docs say an agent never runs})`
 
 ## Final Compliance Report
 
-(Filled in at the end. See `references/compliance-gate.md`.)
+{The table from `references/compliance-gate.md`, every row answered. A spec that still reads
+"filled in at the end" here is not ready.}
 
 ## Changelog
 

@@ -40,8 +40,8 @@ case "$MODE" in
 esac
 
 if [ ! -t 0 ]; then
-  echo "setup-loop: this asks questions, so it needs a terminal." >&2
-  echo "Copy $TEMPLATE to $ENV_FILE and fill it in by hand instead." >&2
+  echo "setup-loop: this asks questions, so it needs a real terminal (a Claude Code '!' command is not one)." >&2
+  echo "Run it from a terminal, or copy $TEMPLATE to $ENV_FILE and set its GH_TOKEN= and CLAUDE_CODE_OAUTH_TOKEN= lines by hand." >&2
   exit 3
 fi
 

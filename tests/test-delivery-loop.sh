@@ -564,6 +564,16 @@ set +e
 set -e
 if [ "$rc" = 4 ] && ! remote_has feat-one && grep -q "aborting rather than risking" "$TMP/err"; then pass; else fail "exit $rc"; fi
 
+# An authenticated token that cannot see the repository is a pre-flight refusal naming the settings
+# file, not a 404 read hours later as "no PR".
+CASE="a token without access to the repository fails pre-flight and names the settings file"
+fresh norepo
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_GH=norepo; run_loop ); rc=$?
+set -e
+if [ "$rc" = 3 ] && ! remote_has feat-one && grep -q "GH_TOKEN= line in $LOOP_ENV" "$TMP/err"; then pass; else fail "exit $rc: $(cat "$TMP/err")"; fi
+
 CASE="a closed unmerged PR escalates"
 fresh closed
 printf 'feat-one|CLOSED|7|NONE|\n' > "$LOOP_TEST_DIR/prs.txt"
