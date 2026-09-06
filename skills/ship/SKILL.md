@@ -7,8 +7,9 @@ description: "Take a feature from a sentence to a merged PR — interview, spec,
 
 > **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
 > (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill
-> loads. `<state>` is `~/.local/state/engineering-loop/<repo>/`, the loop's state for this
-> repository; `--dry-run` prints the exact path. Nothing of either lives in the repository.
+> loads; installed, that is under `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/cache/`. `<state>` is
+> `~/.local/state/engineering-loop/<repo>/`, the loop's state for this repository; `--dry-run`
+> prints the exact path. Nothing of either lives in the repository.
 
 The front door. One command from *"I want X"* to a merged PR, with the human as an
 approval gate at exactly two points and everything between automated.
@@ -61,6 +62,11 @@ common case, not the exception.
    - `gh auth status`. If it fails, tell the user to run `gh auth login` — or `gh auth switch
      --user <account>` when the repository belongs to another of their accounts — in their
      terminal.
+   - `gh api repos/<owner>/<repo> --silent`, with the name from `git remote get-url origin`. If it
+     fails while `gh auth status` passed, the token cannot see this repository, and every PR read
+     the loop makes later would be a 404. Say it in one line: *the `GH_TOKEN=` line in
+     `~/.config/engineering-loop/loop.env` names a token without access to this repository; widen
+     it, or run `<loop>/setup-loop.sh` in a terminal and paste one that has it.* Nothing else.
    - `jq`, and `timeout` or `gtimeout`, on PATH. Name the install line otherwise
      (`brew install coreutils jq` on macOS).
    - When `~/.config/engineering-loop/loop.env` sets `LOOP_SANDBOX=1`, run `<loop>/setup-loop.sh --show`: it reports
@@ -97,9 +103,18 @@ common case, not the exception.
    sessions: cut each one to what a single fresh session can read and build. Each
    phase's section names the **host's skills** it must use, resolved from the
    repository's skill index. The user reads all of it at gate 1.
-4. **Audit.** `/pre-implement-spec .ai/specs/{file}.md`. Four parallel agents.
-5. **Revise until the verdict is "ready".** Fix what it found; re-run it if the
-   findings were structural. Do not carry Critical or High findings forward.
+
+   **The spec is sized to the change**, and `/spec-writing` says which size it is in the
+   TLDR: **bounded** (one module, no new contract or table, one or two phases) or **full**.
+   A bounded spec is the minimal sections only. A forty-line change does not get a
+   four-hundred-line spec; the user has to read it at gate 1, and its length is the
+   cost of that gate.
+4. **Audit.** `/pre-implement-spec .ai/specs/{file}.md`. It reads the size from the TLDR:
+   one audit agent for a bounded spec, four in parallel for a full one.
+5. **Revise until the verdict is "ready".** Fix what it found. Re-run the audit only when
+   the spec is full and the findings were structural; a bounded spec is fixed and goes to
+   the user. Never build anything to check the spec — no scratch implementation, no
+   trial run. Do not carry Critical or High findings forward.
 6. **Commit the spec** on this branch. Do **not** open a PR for it: it rides in
    the unit's one PR, beside the code.
 7. **STOP and wait for the user's OK.** Report the ledger, the phase list and the
@@ -136,20 +151,24 @@ bounds a session is the phase it is given.
    outlive this chat session: a foreground command times out, and a plain
    background job is killed when the session ends or the machine is short of
    memory. So the loop is started as its own process group, with its output in a
-   log outside the repository, and the session only watches:
+   log outside the repository, and the session only watches. One plain command does
+   it — a worktree-isolated session's guard refuses a compound `nohup bash -c` line,
+   so do not write one of your own:
    ```sh
-   RUNS=${XDG_STATE_HOME:-$HOME/.local/state}/engineering-loop/runs
-   mkdir -p "$RUNS"
-   LOG=$RUNS/$(basename "$(git rev-parse --show-toplevel)")-$(git branch --show-current).log
-   ( set -m; nohup bash -c '<loop>/delivery-loop.sh "$1"; echo "delivery-loop: exit $?"' _ .ai/specs/{file}.md \
-       >"$LOG" 2>&1 & echo $! >"$LOG.pid" )
+   <loop>/launch.sh .ai/specs/{file}.md
    ```
-   Tell the user the log path and that the run survives closing this chat. Then
-   watch the log — `tail -f` through a monitor, or by reading it when asked — for
-   the lines the loop prints and relay each in one sentence as it lands:
-   `session N builds Phase …`, `… is ticked and pushed`, `runs the closing step`,
-   `paused:`, `ESCALATE`, `open and waiting for review`, and the final
-   `delivery-loop: exit N`. Do not narrate the log; report the events.
+   It prints the log path (`~/.local/state/engineering-loop/runs/<repo>-<branch>.log`)
+   and the pid beside it. Tell the user the log path and that the run survives closing
+   this chat.
+
+   Then watch the log two ways at once: a monitor on the file, **and** a timer that reads
+   its last line every few minutes — a monitor alone went quiet in the middle of a run and
+   the final result was never reported. Relay **only** these events, one sentence each:
+   a phase `ticked and pushed`, `paused:`, `ESCALATE`, the PR `open and waiting for
+   review`, and the final `delivery-loop: exit N`. Not the sessions starting, not the
+   gates running, not the closing steps: the user asked for a feature, not a narration.
+   A `delivery-loop: exit N` line, however it is noticed, always produces the report in
+   step 3.
 
    What the loop does meanwhile: one fresh `claude -p` per unticked phase in this
    worktree, on `LOOP_MODEL` (default `opus`). Each session implements its phase
@@ -163,10 +182,10 @@ bounds a session is the phase it is given.
    `sonnet`, attests it on origin, and records the tick with the measurements and
    the PR number.
 3. **Report and stop** when the exit line arrives. `exit 0`: the PR, what the
-   loop verified, and — from `.ai/telemetry/<spec>/` — one row per session:
-   turns, peak context against `SESSION_CONTEXT_ALARM`, wall clock, model. Then
-   wait; merging is the user's gate. `exit 5` and `exit 4` are the two sections
-   below.
+   loop verified, and — from `<state>/telemetry/<spec>/<unit>.md`, the same table the
+   PR body carries under `## Sessions` — one row per session: turns, peak context
+   against `SESSION_CONTEXT_ALARM`, wall clock, model. Then wait; merging is the
+   user's gate. `exit 5` and `exit 4` are the two sections below.
 
 **The gates are the spec's, and the spec's are the host's.** The `## Gates` section
 `/spec-writing` derived from the host's docs is what every session runs and what the

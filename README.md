@@ -54,10 +54,14 @@ Prefer a terminal for an overnight run over SSH? The loop is a script inside the
 feature's worktree:
 
 ```sh
-LOOP=~/.claude/plugins/cache/engineering-loop/engineering-loop/*/loop
+LOOP=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/engineering-loop/engineering-loop/*/loop
 $LOOP/delivery-loop.sh .ai/specs/<file>.md --dry-run   # the plan; creates nothing
 $LOOP/delivery-loop.sh .ai/specs/<file>.md             # build it
+$LOOP/launch.sh .ai/specs/<file>.md                    # the same, detached: what /ship runs
 ```
+
+A detached run logs to `~/.local/state/engineering-loop/runs/<repo>-<branch>.log`; its last line
+is `delivery-loop: exit N` once it has finished.
 
 ## What your repository needs
 

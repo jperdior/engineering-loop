@@ -234,7 +234,7 @@ LOOP_SANDBOX="${LOOP_SANDBOX:-0}"
 # host has it installed, superpowers, through `--plugin-dir`. On the host the session inherits the
 # user's own installs and needs neither.
 SUPERPOWERS_DIR=""
-for __sp in "$HOME"/.claude/plugins/cache/*/superpowers/*/; do
+for __sp in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/superpowers/*/; do
   [ -d "$__sp" ] && SUPERPOWERS_DIR="${__sp%/}"
 done
 unset __sp
@@ -294,7 +294,9 @@ warn() { printf 'delivery-loop: %s\n' "$*" >&2; }
 # stdout is usually a log file. DELIVERY_LOOP_NOTIFY receives the headline as $1 and may never fail
 # the run.
 attention() {
-  [ "${DELIVERY_LOOP_BELL:-1}" = "0" ] || printf '\a' > /dev/tty 2>/dev/null || true
+  # stderr is silenced before /dev/tty is opened: a detached run has no tty, and the shell reports
+  # the failed open on the stderr it had at that point.
+  [ "${DELIVERY_LOOP_BELL:-1}" = "0" ] || printf '\a' 2>/dev/null > /dev/tty || true
   [ -z "${DELIVERY_LOOP_NOTIFY:-}" ] || "$DELIVERY_LOOP_NOTIFY" "$1" >/dev/null 2>&1 || true
 }
 
@@ -466,6 +468,11 @@ preflight() {
 
   if ! gh auth status >/dev/null 2>&1; then
     warn "gh is not authenticated. Run: gh auth status"
+    missing=1
+  elif ! gh api "repos/$(origin_nwo)" --silent >/dev/null 2>&1; then
+    # An authenticated token that cannot see this repository fails every PR read later as a 404 the
+    # loop would have to read as "no PR". A fine-grained PAT scoped to another repository does this.
+    warn "the GitHub token cannot read $(origin_nwo): the GH_TOKEN= line in $LOOP_ENV names a token without access to this repository. Widen it, or run $LOOP_DIR/setup-loop.sh in a terminal and paste one that has it."
     missing=1
   fi
 
@@ -1544,6 +1551,18 @@ run_session() {
 # https://x-access-token:$GH_TOKEN@github.com/ through git's own url.<base>.insteadOf, passed as
 # environment rather than written to any config file. The ssh prefix is taken from the actual remote
 # because it may be a per-user ssh alias rather than a hostname.
+# owner/repo as GitHub names it, from the origin remote in any of its spellings.
+origin_nwo() {
+  local url
+  url="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
+  url="${url%.git}"; url="${url%/}"
+  case "$url" in
+    *://*) url="${url#*://}"; url="${url#*@}"; url="${url#*/}" ;;
+    *:*)   url="${url#*:}" ;;
+  esac
+  printf '%s' "$url"
+}
+
 sandbox_git_env() {
   local url prefix
   url="$(git remote get-url origin 2>/dev/null || true)"
@@ -1927,7 +1946,9 @@ record_telemetry() {
   {
     printf '# %s — `%s`\n\n' "$UNIT" "$BRANCH"
     printf '| | |\n|---|---|\n'
-    printf '| PR | %s |\n' "${pr_number:+#$pr_number}"
+    # Before the PR exists there is no row to write; the PR body carries the table and must not
+    # show an empty cell. unit_is_recorded reads the row's presence as "the PR is recorded".
+    [ -z "$pr_number" ] || printf '| PR | #%s |\n' "$pr_number"
     printf '| size | %s |\n' "$measured"
     printf '| context alarm | %s |\n\n' "$SESSION_CONTEXT_ALARM"
     printf '| session | turns | cost | peak context | wall clock | model |\n|---|---|---|---|---|---|\n'
