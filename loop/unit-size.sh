@@ -42,7 +42,8 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 # Lockfiles, generated files and the spec itself are never reviewable lines. The host adds its own
-# generated paths through LOOP_SIZE_EXCLUDES (space-separated pathspecs, in .loop/loop.env).
+# generated paths through LOOP_SIZE_EXCLUDES (space-separated pathspecs, in the committed
+# .loop/host.env, or failing that .loop/loop.env).
 EXCLUDES=(
   ':(top,exclude)*.lock'
   ':(top,exclude)*-lock.json'
@@ -50,9 +51,11 @@ EXCLUDES=(
   ':(top,exclude)*.gen.*'
   ':(top,exclude).ai/specs/**.md'
 )
-if [ -z "${LOOP_SIZE_EXCLUDES:-}" ] && [ -f "$LOOP_DIR/loop.env" ]; then
-  LOOP_SIZE_EXCLUDES="$(sed -n 's/^LOOP_SIZE_EXCLUDES=//p' "$LOOP_DIR/loop.env" | head -1)"
-fi
+for env_file in "$LOOP_DIR/host.env" "$LOOP_DIR/loop.env"; do
+  [ -n "${LOOP_SIZE_EXCLUDES:-}" ] && break
+  [ -f "$env_file" ] || continue
+  LOOP_SIZE_EXCLUDES="$(sed -n 's/^LOOP_SIZE_EXCLUDES=//p' "$env_file" | head -1)"
+done
 for g in ${LOOP_SIZE_EXCLUDES:-}; do
   EXCLUDES+=(":(top,exclude)$g")
 done

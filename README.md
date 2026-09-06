@@ -97,7 +97,7 @@ build side by side from two shells.
 | Claude Code with the [superpowers](https://github.com/obra/superpowers) plugin | the skills invoke `brainstorming`, `test-driven-development`, `subagent-driven-development` and `dispatching-parallel-agents` from it; `install.sh` installs it when it can |
 | a GitHub remote and an authenticated `gh` | the loop pushes the branch and opens the PR |
 | `git`, `jq`, and GNU `timeout` (`brew install coreutils` on macOS) | pre-flight refuses without them |
-| gate commands that exit non-zero on failure | e.g. `make lint;make test`; every session runs them, and so does the loop |
+| gate commands that exit non-zero on failure, named in your `AGENTS.md` | e.g. `make lint;make test`; `/ship` reads them from your docs into the committed `.loop/host.env`, every session runs them, and so does the loop |
 | Docker, only for `LOOP_SANDBOX=1` | runs each session in a container with no host credentials |
 
 Conventions live in your repository's `AGENTS.md` or `CLAUDE.md`. The skills read the nearest
@@ -114,16 +114,24 @@ curl -fsSL https://raw.githubusercontent.com/jperdior/engineering-loop/main/inst
 This writes the engine to `.loop/`, symlinks every skill into `.claude/skills/`, creates
 `.ai/specs/`, appends the loop's runtime paths to `.gitignore`, and installs the superpowers
 plugin at user scope if the `claude` CLI is on PATH and the plugin is missing. Re-run it to
-update; `.loop/loop.env` and `.loop/state/` are left alone.
+update; `.loop/host.env`, `.loop/loop.env` and `.loop/state/` are left alone.
 
-Then set the gates:
+**The host contract is found out, not typed.** The first `/ship` in a repository reads the gate
+commands, the worktree teardown and the generated paths out of your `AGENTS.md` / `CLAUDE.md`,
+shows you the lines, and commits them as `.loop/host.env`:
 
 ```sh
-cp .loop/loop.env.dist .loop/loop.env && chmod 600 .loop/loop.env
-# edit LOOP_GATES, e.g.  LOOP_GATES=make lint;make test
+LOOP_GATES=make lint;make test
+LOOP_CLEAN_WORKTREE=make clean-worktree          # optional
+LOOP_SIZE_EXCLUDES=api/openapi.json               # optional
+LOOP_DENIALS_EXTRA=Bash(make migrate)             # optional
 ```
 
-Commit `.loop/`, `.claude/skills/`, and `.gitignore`.
+That file is committed and reviewed like any other; it is the same for everyone who builds in the
+repository, and the loop refuses to run without it. `.loop/host.env.dist` shows the format if you
+would rather write it by hand.
+
+Commit `.loop/` (including `host.env`), `.claude/skills/`, and `.gitignore`.
 
 **As a plugin.** The skills can also come from Claude Code's plugin system, which keeps them out
 of the host's `.claude/skills/`:
@@ -214,16 +222,27 @@ fails a name that resolves to nothing. A phase nothing applies to has no `Skills
 
 ## Configuration
 
-All settings live in `.loop/loop.env`. A value exported in the shell overrides the file.
+Two files, one grammar. A value exported in the shell overrides both; `host.env` overrides
+`loop.env`.
+
+**`.loop/host.env` — committed.** The host's contract: facts about the repository, the same for
+everyone. Written by `/ship` from your docs, or by hand from `host.env.dist`.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `LOOP_GATES` | `make lint;make test` | your gates, run from the repo root in this order |
-| `LOOP_MODEL` | `opus` | the model of every build session; the PR session runs on `sonnet` |
-| `LOOP_SANDBOX` | `0` | `1` runs each session in a container with no host credentials |
+| `LOOP_GATES` | none — required | your gates, run from the repo root in this order; pre-flight refuses a run that declares none |
 | `LOOP_CLEAN_WORKTREE` | unset | a command run inside a worktree before it is removed |
 | `LOOP_SIZE_EXCLUDES` | unset | generated paths excluded from the size the ledger records |
 | `LOOP_DENIALS_EXTRA` | unset | extra tools a session must never run, e.g. `Bash(make migrate)` |
+
+**`.loop/loop.env` — gitignored.** What is personal: the two sandbox credentials and how you run
+the loop.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN` | unset | the sandbox's credentials; `setup-loop.sh` writes them |
+| `LOOP_MODEL` | `opus` | the model of every build session; the PR session runs on `sonnet` |
+| `LOOP_SANDBOX` | `0` | `1` runs each session in a container with no host credentials |
 | `MAX_SESSIONS` | phases + 4 | sessions per invocation before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
 | `SESSION_CONTEXT_ALARM` | `150000` | peak context above which a phase is flagged as cut too large |

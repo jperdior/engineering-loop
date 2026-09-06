@@ -51,6 +51,23 @@ common case, not the exception.
 
 ## Phase A — from a sentence to an approved spec
 
+0. **The host contract.** If `.loop/host.env` is missing, or sets no `LOOP_GATES`, write it
+   before anything else — the loop refuses to run without it, and the gates are a fact about the
+   repository that its own docs already state. Read the root `AGENTS.md` / `CLAUDE.md` and derive:
+   - `LOOP_GATES` — the commands its validation section names as what must be green before a PR,
+     in that order, joined with `;`. Only commands the docs name; never a guess.
+   - `LOOP_CLEAN_WORKTREE` — the per-worktree teardown the docs name, if any (a stack to drop, a
+     cache keyed by directory). Omit when the host has none.
+   - `LOOP_SIZE_EXCLUDES` — generated paths the docs say nobody reviews (an OpenAPI dump, a generated
+     client, message catalogs). Omit when none.
+   - `LOOP_DENIALS_EXTRA` — commands the docs mark as never run by an agent (deploys, migrations
+     against a live database, production shells). Omit when none.
+
+   Show the user the lines you derived and the sentence in the docs each came from, then write
+   `.loop/host.env` from `.loop/host.env.dist` and commit it on the feature branch — it reaches
+   `main` in the unit's PR, reviewed. This runs once per repository; when the file exists and
+   names its gates, skip this step.
+
 1. **Interview.** Invoke `superpowers:brainstorming`. This is the one place the
    user's attention is worth most, so spend it here: scope, the decisions with
    more than one defensible answer, what is explicitly out. Ask questions in
@@ -125,9 +142,10 @@ bounds a session is the phase it is given.
    against `SESSION_CONTEXT_ALARM`, wall clock, model. Then wait; merging is the
    user's gate.
 
-**The gates are the host's own.** `LOOP_GATES` in `.loop/loop.env` is a
-semicolon-separated list of shell commands run from the repo root, in order
-(default `make lint;make test`). The loop runs them, and so does `/run-gates`.
+**The gates are the host's own.** `LOOP_GATES` in the committed `.loop/host.env` is a
+semicolon-separated list of shell commands run from the repo root, in order, written in
+Phase A step 0 from the host's own docs. The loop runs them, and so does `/run-gates`;
+there is no default.
 
 **If the loop pauses (exit 5), the account's usage limit is reached.** Nothing is
 wrong with the unit. Say so, and when the user says to continue, re-run the same

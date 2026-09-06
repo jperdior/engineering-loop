@@ -12,10 +12,14 @@
 #   --force-unlock  take THIS UNIT's lock when this script refuses to reclaim it on its own. It
 #                   cannot take one the unit's own session is still behind.
 #
-# Settings are environment variables, read from .loop/loop.env (see loop.env.dist). The shell wins
-# over the file. The main ones:
+# Settings are environment variables, read from two files. `.loop/host.env` is COMMITTED and holds
+# the host's contract -- facts about the repository, the same for everyone who builds in it.
+# `.loop/loop.env` is gitignored and holds what is personal: the sandbox tokens and per-developer
+# knobs. The shell wins over both, host.env wins over loop.env. The main ones:
 #
-#   LOOP_GATES="make lint;make test"  the host's gates, run from the repo root in this order.
+#   LOOP_GATES="make lint;make test"  host.env: the gates, run from the repo root in this order.
+#                                     Required -- pre-flight refuses a run that declares none.
+#   LOOP_CLEAN_WORKTREE, LOOP_SIZE_EXCLUDES, LOOP_DENIALS_EXTRA   host.env, optional.
 #   LOOP_MODEL=opus                   the model of every build session; the PR session runs on sonnet.
 #   MAX_SESSIONS=<phases>+4           sessions per invocation before the unit is declared non-converging.
 #   UNIT_TIMEOUT=7200                 seconds per session, enforced by timeout(1).
@@ -114,20 +118,28 @@ esac
 
 # ---------------------------------------------------------------------------- configuration file
 #
-# .loop/loop.env holds the settings and the two sandbox credentials. A value already exported in
-# the shell is never overwritten, so `LOOP_MODEL=sonnet .loop/delivery-loop.sh …` still works.
+# Two files, one grammar. `.loop/host.env` is the host's contract and is committed: the gates, the
+# per-worktree cleanup, the generated paths, the extra denials -- written once, by /ship from the
+# host's own AGENTS.md or by hand, and reviewed like any other file. `.loop/loop.env` is gitignored
+# and personal: the two sandbox credentials and per-developer knobs. A value already exported in the
+# shell is never overwritten, so `LOOP_MODEL=sonnet .loop/delivery-loop.sh …` still works, and
+# host.env is read before loop.env so a developer's file cannot quietly change what the gates are.
 #
-# Read from the driver first, then the main checkout, first writer winning. The file is gitignored,
-# so a worktree the loop is driven from has none of its own; without the second read an in-place
-# run would find no settings at all.
+# Each is read from the driver first, then the main checkout, first writer winning: loop.env is
+# gitignored, so a worktree the loop is driven from has none of its own, and without the second read
+# an in-place run would find no settings at all.
+#
+# `secret` marks a file that holds tokens and should not be readable beyond its owner.
 load_env_file() {
-  local f="$1" line key val
+  local f="$1" secret="${2:-}" line key val
   [ -f "$f" ] || return 0
 
-  # The file holds tokens. GNU stat first: BSD's -c fails while GNU's -f answers something else.
-  case "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)" in
-    ?[1-7]?|??[1-7]) printf 'delivery-loop: %s is readable beyond you; chmod 600 it\n' "$f" >&2 ;;
-  esac
+  if [ -n "$secret" ]; then
+    # GNU stat first: BSD's -c fails while GNU's -f answers something else.
+    case "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)" in
+      ?[1-7]?|??[1-7]) printf 'delivery-loop: %s is readable beyond you; chmod 600 it\n' "$f" >&2 ;;
+    esac
+  fi
 
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*) continue ;; esac
@@ -136,18 +148,26 @@ load_env_file() {
     case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
     [ -z "${!key:-}" ] || continue
     export "$key=$val"
+    [ "$key" != LOOP_GATES ] || LOOP_GATES_FROM="$f"
   done < "$f"
 }
 
-load_env_file "$LOOP_DIR/loop.env"
-[ "$MAIN_ROOT" = "$ROOT" ] || load_env_file "$MAIN_ROOT/.loop/loop.env"
+# Where the gates came from is reported by --dry-run: a run whose gates were a shell override and a
+# run reading the committed contract produce the same PR, and only this line tells them apart.
+LOOP_GATES_FROM=""
+[ -z "${LOOP_GATES:-}" ] || LOOP_GATES_FROM="the shell"
+
+load_env_file "$LOOP_DIR/host.env"
+[ "$MAIN_ROOT" = "$ROOT" ] || load_env_file "$MAIN_ROOT/.loop/host.env"
+load_env_file "$LOOP_DIR/loop.env" secret
+[ "$MAIN_ROOT" = "$ROOT" ] || load_env_file "$MAIN_ROOT/.loop/loop.env" secret
 
 # A session is one phase, and that is what bounds its context. A session cannot observe its own
 # token count, so a budget in the prompt is not obeyed; a phase is observable from outside. The loop
 # reads the `## Progress` checklist on the branch, hands the next unticked phase to a fresh process,
 # and checks the tick when that process exits. SESSION_CONTEXT_ALARM is a reading on the telemetry,
 # not a limit.
-LOOP_GATES="${LOOP_GATES:-make lint;make test}"
+LOOP_GATES="${LOOP_GATES:-}"
 LOOP_MODEL="${LOOP_MODEL:-opus}"
 PR_MODEL="sonnet"
 SESSION_CONTEXT_ALARM="${SESSION_CONTEXT_ALARM:-150000}"
@@ -412,6 +432,17 @@ preflight() {
   done
 
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || { warn "missing required binary: $CLAUDE_BIN"; missing=1; }
+
+  # The gates are the host's to declare and the loop's to run; a default here would let a repository
+  # with no contract build a whole unit against a gate nobody chose. The file is committed, so its
+  # absence is a fact about the repository, not about this developer.
+  if [ -z "$LOOP_GATES" ]; then
+    warn "no gates declared. The host contract lives in .loop/host.env (committed), with at least:"
+    warn "  LOOP_GATES=<the commands that must be green, separated by ;>"
+    warn "/ship writes that file from the repository's AGENTS.md on first run; .loop/host.env.dist"
+    warn "shows the format for writing it by hand."
+    missing=1
+  fi
 
   if ! gh auth status >/dev/null 2>&1; then
     warn "gh is not authenticated. Run: gh auth status"
@@ -1926,7 +1957,7 @@ if [ "$DRY_RUN" = 1 ]; then
   # LOOP_SANDBOX is reported because a host run and a container run produce the same PR; left out,
   # a run believed sandboxed and one that was not would be indistinguishable.
   log "bounds: MAX_SESSIONS=${MAX_SESSIONS:-—} UNIT_TIMEOUT=${UNIT_TIMEOUT}s SESSION_CONTEXT_ALARM=$SESSION_CONTEXT_ALARM"
-  log "gates:  $LOOP_GATES"
+  log "gates:  $LOOP_GATES (${LOOP_GATES_FROM#"$ROOT"/})"
   log "models: build sessions on $LOOP_MODEL, the PR session on $PR_MODEL"
   if [ "$LOOP_SANDBOX" = "1" ]; then
     log "sandbox: ON — sessions run in $LOOP_IMAGE"

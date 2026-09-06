@@ -96,7 +96,9 @@ fresh() {
   for s in delivery-loop parse-ledger unit-size comment-ratio reclaim-worktree; do
     cp "$REPO_ROOT/loop/$s.sh" "$REPO/.loop/"
   done
-  cp "$REPO_ROOT/loop/loop.env.dist" "$REPO/.loop/"
+  cp "$REPO_ROOT/loop/loop.env.dist" "$REPO_ROOT/loop/host.env.dist" "$REPO/.loop/"
+  # The host contract is committed, like a real host's: the gates the stubbed `make` answers to.
+  printf 'LOOP_GATES=make lint;make test\n' > "$REPO/.loop/host.env"
   write_spec "$REPO"
   # The real repo ignores every path the loop writes to, so a driver tree stays clean while a run is
   # in flight. Without this the fixture reports the loop's own state as uncommitted work and the
@@ -1343,6 +1345,34 @@ CASE="the bounds line reports the sessions, the timeout and the alarm"
 if grep -qE "MAX_SESSIONS=[0-9]+ UNIT_TIMEOUT=[0-9]+s SESSION_CONTEXT_ALARM=[0-9]+" "$TMP/out"; then pass
 else fail "$(grep bounds "$TMP/out")"; fi
 
+# --------------------------------------------------------------------------- the host contract
+
+# The gates are a fact about the repository, committed in host.env, and a developer's gitignored
+# loop.env cannot quietly change them: host.env is read first, and first writer wins.
+CASE="the gates come from the committed host.env, over loop.env"
+fresh hostenv
+printf 'LOOP_GATES=make nothing-of-the-sort\n' > "$REPO/.loop/loop.env"
+if run_loop --dry-run && grep -q "gates:  make lint;make test (.loop/host.env)" "$TMP/out"; then pass
+else fail "$(grep gates "$TMP/out")"; fi
+
+# There is no default gate. A repository that declares none has not been read yet, and building a
+# unit against a gate nobody chose is worse than refusing.
+CASE="a repository that declares no gates is refused, naming the file"
+fresh nogates
+git -C "$REPO" rm -q .loop/host.env
+git -C "$REPO" commit -qm "no contract"
+set +e
+run_loop; rc=$?
+set -e
+if [ "$rc" = 3 ] && grep -q "no gates declared" "$TMP/err" && grep -q "host.env" "$TMP/err" \
+   && ! remote_has feat-one; then pass
+else fail "exit $rc: $(tail -3 "$TMP/err")"; fi
+
+CASE="a shell override of the gates is reported as such"
+fresh shellgates
+if LOOP_GATES="make lint" run_loop --dry-run && grep -q "gates:  make lint (the shell)" "$TMP/out"; then pass
+else fail "$(grep gates "$TMP/out")"; fi
+
 # --------------------------------------------------------------------------- the env file
 
 CASE="the env file sets values the shell has not"
@@ -1374,6 +1404,14 @@ if grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' loop/loop.env.dist \
    && grep -q 'LOOP_MODEL' loop/loop.env.dist \
    && git check-ignore -q .loop/loop.env; then pass
 else fail "template incomplete, or the real file is not gitignored"; fi
+
+# The contract is the host's, so its template carries the gates and its real file is NOT ignored;
+# the personal template carries no gate at all.
+CASE="the host contract template names the gates, and the real file is committed"
+if grep -q '^LOOP_GATES=' loop/host.env.dist \
+   && ! grep -q '^LOOP_GATES=' loop/loop.env.dist \
+   && ! git check-ignore -q .loop/host.env; then pass
+else fail "host.env.dist lacks LOOP_GATES, loop.env.dist still carries it, or host.env is ignored"; fi
 
 # --------------------------------------------------------------------------- the harness itself
 
