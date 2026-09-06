@@ -68,7 +68,9 @@ common case, not the exception.
    ledger — **one unit**, whose backticked branch must be **this** branch — and
    the phase checklist under `## Progress`, which is what the loop hands to each
    session and checks when it exits. The phases are the sessions: cut each one to
-   what a single fresh session can read and build.
+   what a single fresh session can read and build. Each phase's section names the
+   **host's skills** it must use, resolved from the repository's skill index; the
+   user reads that resolution at gate 1, and the loop hands it to the session.
 4. **Audit.** `/pre-implement-spec .ai/specs/{file}.md`. Four parallel agents.
 5. **Revise until the verdict is "ready".** Fix what it found; re-run it if the
    findings were structural. Do not carry Critical or High findings forward.

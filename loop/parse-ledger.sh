@@ -2,8 +2,9 @@
 #
 # Parse a spec's checklists into one machine-readable row per entry.
 #
-#   parse-ledger.sh <spec>            the `## Delivery` ledger:  done|unit|branch
-#   parse-ledger.sh <spec> --phases   the `## Progress` checklist: done|phase|title
+#   parse-ledger.sh <spec>                     the `## Delivery` ledger:  done|unit|branch
+#   parse-ledger.sh <spec> --phases            the `## Progress` checklist: done|phase|title
+#   parse-ledger.sh <spec> --skills "Phase N"  the host skills that phase names, one per line
 #
 # Called by /implement-spec, /archive-spec and the delivery loop. One grammar, one implementation.
 #
@@ -23,6 +24,13 @@
 #   - A section with no entries is exit 3, like any malformed section: exit 0 with no output would
 #     leave the loop building nothing and reporting success.
 #
+# `--skills` reads a phase's own section: the `### Phase N — title` (or `####`) heading whose label
+# is exactly the one asked for, closed by the next `#{1,4}` heading. Inside it, one line of the form
+# `- **Skills:** `name`, `name`` names the host's skills the phase must use; the backticked names
+# are printed one per line. Skills are optional: a phase with no section or no Skills line prints
+# nothing and exits 0. A Skills line naming nothing is exit 3, because a session cannot ask what an
+# empty list meant.
+#
 # Exit: 0 parsed, 2 usage, 3 the section is malformed or absent.
 
 set -euo pipefail
@@ -30,21 +38,56 @@ set -euo pipefail
 SPEC=""
 SECTION="Delivery"
 LABEL="PR"
+SKILLS_OF=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --phases) SECTION="Progress"; LABEL="Phase" ;;
+    --skills) [ -n "${2:-}" ] || { echo "usage: parse-ledger.sh <spec-file> --skills \"Phase N\"" >&2; exit 2; }
+              SKILLS_OF="$2"; shift ;;
     -*)       echo "parse-ledger: unknown option '$1'" >&2; exit 2 ;;
-    *)        [ -z "$SPEC" ] || { echo "usage: parse-ledger.sh <spec-file> [--phases]" >&2; exit 2; }; SPEC="$1" ;;
+    *)        [ -z "$SPEC" ] || { echo "usage: parse-ledger.sh <spec-file> [--phases | --skills \"Phase N\"]" >&2; exit 2; }; SPEC="$1" ;;
   esac
   shift
 done
 
-[ -n "$SPEC" ] || { echo "usage: parse-ledger.sh <spec-file> [--phases]" >&2; exit 2; }
+[ -n "$SPEC" ] || { echo "usage: parse-ledger.sh <spec-file> [--phases | --skills \"Phase N\"]" >&2; exit 2; }
 
 if [ ! -f "$SPEC" ]; then
   echo "parse-ledger: no such spec: $SPEC" >&2
   exit 3
+fi
+
+if [ -n "$SKILLS_OF" ]; then
+  awk -v phase="$SKILLS_OF" '
+    BEGIN {
+      # The label, then a word boundary: `Phase 1` must not open on `Phase 10`.
+      open_re   = "^[[:space:]]*#{3,4}[[:space:]]+" phase "([^0-9A-Za-z]|$)"
+      skills_re = "^[[:space:]]*([-*][[:space:]]+)?\\*\\*Skills:?\\*\\*:?"
+    }
+    /^[[:space:]]*```+[^`]*$/        { infence = !infence; next }
+    infence                          { next }
+    $0 ~ open_re && !found           { found = 1; f = 1; next }
+    /^[[:space:]]*#{1,4}[[:space:]]/ { f = 0 }
+    !f                               { next }
+    $0 !~ skills_re                  { next }
+    {
+      rest = $0
+      sub(skills_re, "", rest)
+      n = 0
+      while (match(rest, /`[^`]+`/)) {
+        print substr(rest, RSTART + 1, RLENGTH - 2)
+        n++
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      if (n == 0) {
+        printf "parse-ledger: the Skills line of %s names no skill; each is a backticked name\n", phase > "/dev/stderr"
+        exit 3
+      }
+      exit 0
+    }
+  ' "$SPEC"
+  exit $?
 fi
 
 awk -v section="$SECTION" -v label="$LABEL" '

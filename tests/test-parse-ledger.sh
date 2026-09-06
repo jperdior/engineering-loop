@@ -84,6 +84,33 @@ check "an unlabelled checkbox among the phases fails" 3 "$TMP/note.md" "x|Phase 
 
 check "a missing file fails" 3 "$TMP/does-not-exist.md" ""
 
+# --skills reads a phase's own section. The fixture carries every decoy: a Skills line in prose
+# before any phase, one inside a fence, a `Phase 10` whose label starts with `Phase 1`, and trailing
+# prose on the line that is not a skill.
+check "the skills of a phase, from its own section" 0 tests/fixtures/adversarial-ledger.md \
+"scaffold-port
+port-tests" --skills "Phase 1"
+
+check "a label is matched whole, not as a prefix" 0 tests/fixtures/adversarial-ledger.md \
+"tenth-skill" --skills "Phase 10"
+
+check "a level-four heading opens a phase section too, and a Skills line naming nothing fails" 3 \
+  tests/fixtures/adversarial-ledger.md "" --skills "Phase 2"
+
+check "a phase with no Skills line has no skills" 0 tests/fixtures/adversarial-ledger.md "" --skills "Phase 3"
+
+check "a phase with no section has no skills" 0 tests/fixtures/adversarial-ledger.md "" --skills "Phase 4"
+
+# shellcheck disable=SC2016
+printf '## Delivery\n\n- [ ] **PR 1** - `feat-ok` - fine\n' > "$TMP/nophasing.md"
+check "a spec with no per-phase sections has no skills" 0 "$TMP/nophasing.md" "" --skills "Phase 1"
+
+set +e
+$PARSE tests/fixtures/adversarial-ledger.md --skills >/dev/null 2>&1; rc=$?
+set -e
+if [ "$rc" = 2 ]; then printf 'ok   %s\n' "--skills without a phase is a usage error"
+else printf 'FAIL %-44s exit %s, wanted 2\n' "--skills without a phase is a usage error" "$rc" >&2; failures=$((failures + 1)); fi
+
 if [ "$failures" -ne 0 ]; then
   printf '\nFAIL: %d test(s) failed.\n' "$failures" >&2
   exit 1

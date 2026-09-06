@@ -44,3 +44,29 @@ _Notes:_ a session rewrites this paragraph. It mentions **Phase 9** in bold and 
 ## Risks
 
 - [ ] a checkbox after the section closed
+
+## Phasing
+
+Prose mentioning **Skills:** `decoy-in-prose` before any phase section; it belongs to no phase.
+
+### Phase 1 — the port, with `Inline` code
+
+- **Build:** the port.
+- **Skills:** `scaffold-port`, `port-tests` — the trailing prose is not a skill
+- **Done when:** its tests are green.
+
+```markdown
+- **Skills:** `fenced-decoy`
+```
+
+### Phase 10 — a label that starts with the one above
+
+- **Skills:** `tenth-skill`
+
+#### Phase 2 - the adapter, a level-four heading and a plain dash
+
+* **Skills:** nothing backticked here, which is a malformed line
+
+### Phase 3 — the wiring, with no Skills line at all
+
+- **Build:** the wiring.
