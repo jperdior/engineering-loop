@@ -10,6 +10,7 @@
 - [ ] `## Progress` present, opening with one `- [ ] **Phase N** — title` line per phase, in the order and with the titles of `## Phasing`
 - [ ] Every unindented checkbox under `## Progress` is a phase line; notes are prose under `_Notes:_`
 - [ ] Each phase has a `### Phase N — title` section under `## Phasing`, and its `- **Skills:**` line names the host skills its deliverables call for — each resolving to a skill the host has — or is absent because none applies
+- [ ] `## Gates` present: one backticked command per line, each a validation command the host's docs name, in their order; `_Cleanup:_` / `_Excludes:_` / `_Denials:_` only where the docs give a basis
 - [ ] Every unit leaves `main` deployable **when merged in ledger order** — no half-wired feature, no reader without its migration
 - [ ] A second unit names a real deployment seam and its required merge order
 - [ ] Changelog section present

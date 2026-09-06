@@ -1,6 +1,6 @@
 ---
 name: run-gates
-description: Run the host repository's verification gate — read the gate commands the host declares in its committed .loop/host.env (or derive them from its AGENTS.md when that file is missing), dispatch each as a parallel subagent, and report PASS/FAIL per gate with evidence. Triggers on "run the gate", "run gates", "verify the branch", "ci gate".
+description: Run the host repository's verification gate — read the gate commands from the spec's ## Gates section (or derive them from the host's AGENTS.md when no spec is in play), dispatch each as a parallel subagent, and report PASS/FAIL per gate with evidence. Triggers on "run the gate", "run gates", "verify the branch", "ci gate".
 ---
 
 # Run the Verification Gate
@@ -22,29 +22,24 @@ called green.
 
 ## Where the gates come from
 
-The host declares them in its **committed** `.loop/host.env`:
+**The spec, when there is one.** Every spec carries a `## Gates` section that `/spec-writing`
+derived from the host's docs, and the loop runs exactly those. Under the loop the prompt names the
+spec; interactively, the spec on this branch is the one whose `## Delivery` ledger names the
+current branch. Read the list with the parser, one command per line, each run **from the
+repository root**, in order:
 
 ```sh
-LOOP_GATES="make lint;make test"
+.loop/parse-ledger.sh <spec-file> --gates
 ```
 
-A semicolon-separated list of shell commands, each run **from the repository root**. Read the
-value, split it on `;`, trim each entry. Empty entries are dropped. Nothing here rewrites, narrows
-or re-orders a command: a gate is run exactly as the host wrote it.
+Nothing here rewrites, narrows or re-orders a command: a gate is run exactly as the spec wrote it.
 
-```sh
-# shellcheck disable=SC1091
-[ -f .loop/host.env ] && . .loop/host.env
-printf '%s\n' "${LOOP_GATES:-}" | tr ';' '\n'
-```
-
-**When `.loop/host.env` is missing or sets no `LOOP_GATES`, find out from the host.** Read the
-root `AGENTS.md` / `CLAUDE.md`: the commands its validation section names as what must be green
-before a PR (`make lint`, `make test`, `pnpm check`, `cargo test` …) are the gates, in the order
-it lists them. Run those, and say in the report that they were derived because `.loop/host.env`
-declares none — `/ship` writes that file on its first run, and until it exists the loop's own
-pre-flight refuses to run. Never invent a gate the host's docs do not name, and never fall back
-to a default the host did not write.
+**The host's docs, when there is no spec.** A branch with no spec — a hotfix, a review of someone
+else's work — still has gates: read the root `AGENTS.md` / `CLAUDE.md`, and the commands its
+validation section names as what must be green before a PR (`make lint`, `make test`,
+`pnpm check`, `cargo test` …) are the gates, in the order it lists them. Say in the report that
+they came from the docs. Never invent a gate the docs do not name, and never fall back to a
+default the host did not write; a host whose docs name no gate is a finding, not a pass.
 
 ## The base
 
@@ -104,7 +99,7 @@ A compact table of gate → PASS/FAIL with evidence, plus the diff scope line.
 ## Output
 
 ```text
-Verification gate ({N} gates from .loop/host.env)
+Verification gate ({N} gates from the spec's ## Gates)
   diff: {M} files changed vs {base}
   make lint                     PASS
   make test                     PASS ({K} tests)

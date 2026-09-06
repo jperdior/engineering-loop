@@ -105,6 +105,39 @@ check "a phase with no section has no skills" 0 tests/fixtures/adversarial-ledge
 printf '## Delivery\n\n- [ ] **PR 1** - `feat-ok` - fine\n' > "$TMP/nophasing.md"
 check "a spec with no per-phase sections has no skills" 0 "$TMP/nophasing.md" "" --skills "Phase 1"
 
+# --gates reads the host contract the spec carries. The fixture has prose with a backticked decoy,
+# a trailing note on a gate, a nested item, a fenced example, and a list item in the next section.
+check "the gates, one command per line, in order" 0 tests/fixtures/adversarial-ledger.md \
+"make lint
+make test" --gates
+
+check "the cleanup detail" 0 tests/fixtures/adversarial-ledger.md "make clean-worktree" --host cleanup
+check "the excludes detail, several values" 0 tests/fixtures/adversarial-ledger.md \
+"api/openapi.json
+web/messages/*.json" --host excludes
+check "a bold label works for a detail too" 0 tests/fixtures/adversarial-ledger.md \
+"Bash(make migrate)
+Bash(* doctrine:migrations:migrate*)" --host denials
+
+# shellcheck disable=SC2016
+printf '## Gates\n\n- `make lint`\n' > "$TMP/gatesonly.md"
+check "a detail the spec does not carry is empty, exit 0" 0 "$TMP/gatesonly.md" "" --host cleanup
+
+printf '## Gates\n\n- make lint\n' > "$TMP/gatesbare.md"
+check "a gate without a backticked command fails" 3 "$TMP/gatesbare.md" "" --gates
+
+printf '## Gates\n\nProse only.\n' > "$TMP/gatesempty.md"
+check "a ## Gates naming no gate fails" 3 "$TMP/gatesempty.md" "" --gates
+
+check "a spec with no ## Gates fails" 3 "$TMP/nophasing.md" "" --gates
+check "a spec with no ## Gates has no details either" 0 "$TMP/nophasing.md" "" --host denials
+
+set +e
+$PARSE tests/fixtures/adversarial-ledger.md --host nope >/dev/null 2>&1; rc=$?
+set -e
+if [ "$rc" = 2 ]; then printf 'ok   %s\n' "--host with an unknown key is a usage error"
+else printf 'FAIL %-44s exit %s, wanted 2\n' "--host with an unknown key is a usage error" "$rc" >&2; failures=$((failures + 1)); fi
+
 set +e
 $PARSE tests/fixtures/adversarial-ledger.md --skills >/dev/null 2>&1; rc=$?
 set -e

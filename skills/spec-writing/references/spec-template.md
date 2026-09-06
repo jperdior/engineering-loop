@@ -121,6 +121,20 @@ unindented checkbox here must be a phase line; put anything else under `_Notes:_
 
 _Notes:_ not started.
 
+## Gates
+
+The host contract, derived from the host's `AGENTS.md` / `CLAUDE.md` when this spec is written and
+read by the loop from the branch. One backticked command per line, in the order the host's validation
+section names them; the three labelled lines are optional and each comes from something the docs say.
+`.loop/parse-ledger.sh --gates` reads the list; the loop refuses a spec without one. Required.
+
+- `{gate command}`
+- `{gate command}`
+
+_Cleanup:_ `{per-worktree teardown the docs name; omit the line when there is none}`
+_Excludes:_ `{generated path}`, `{generated path}`
+_Denials:_ `Bash({command the docs say an agent never runs})`
+
 ## Risks & Impact Review
 
 | Risk | Severity | Affected area | Mitigation | Residual |
