@@ -146,6 +146,11 @@ unit_label="$(printf '%s\n' "$prompt" | sed -n 's/^Unit:[[:space:]]*\([^ ]* [^ ]
 phase="$(printf '%s\n' "$prompt" | sed -n 's/^Phase:[[:space:]]*\([^—]*[^ —]\).*/\1/p' | head -1)"
 step="$(printf '%s\n' "$prompt" | sed -n 's/^Step:[[:space:]]*//p' | head -1)"
 
+# The skills the prompt hands this session, keyed by what it was building, so a case can assert
+# that a phase was told exactly the skills its own section names.
+printf '%s|%s\n' "${phase:-closing:$step}" \
+  "$(printf '%s\n' "$prompt" | sed -n 's/^Skills:[[:space:]]*//p' | head -1)" >> "$LOOP_TEST_DIR/skills.txt"
+
 # APPEND, ONE LINE PER SESSION, so a session that never ran is distinguishable from one that did:
 # on a shared branch an overwrite makes two sessions produce a byte-identical tree.
 printf 'session %s %s\n' "$branch" "${phase:-closing:$step}" >> "sessions-$branch.txt"

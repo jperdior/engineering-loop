@@ -1087,8 +1087,30 @@ the same gap papered over silently ships an implementation nobody agreed to.
 BLOCK
 }
 
+# The skills a phase names are the host's own -- its scaffolds, its test runners, its checks -- and
+# the spec resolved them at gate 1, where a human read the list. They ride in the prompt so a fresh
+# session invokes them by instruction rather than by noticing them in its skill list.
+phase_skills() {
+  local phase="$1" tmp="$PHASES.spec" out rc=0
+  spec_on_branch "$tmp"
+  out="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --skills "$phase" 2>"$PHASES.err")" || rc=$?
+  rm -f "$tmp"
+  if [ "$rc" != 0 ]; then
+    warn "$UNIT: the Skills line of $phase does not parse, so the session is told none: $(head -1 "$PHASES.err")"
+    return 0
+  fi
+  printf '%s\n' "$out" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }'
+}
+
 phase_prompt() {
-  local spec="$1" unit="$2" branch="$3" phase="$4" title="$5" status_file="$6"
+  local spec="$1" unit="$2" branch="$3" phase="$4" title="$5" status_file="$6" skills="${7:-}"
+  local skills_block=""
+  if [ -n "$skills" ]; then
+    skills_block="Skills: $skills
+        the host's own skills this phase names. Invoke each one BEFORE writing code: they are how
+        this repository scaffolds, tests and checks what the phase builds, and /implement-spec
+        treats the list as binding."
+  fi
   cat <<PROMPT
 You are implementing exactly one phase of an approved spec, unattended, on a branch that already
 carries the phases before it.
@@ -1097,6 +1119,7 @@ Spec:   $spec
 Unit:   $unit - branch $branch
 Phase:  $phase — $title
 Base:   all diffs, gates and reviews for this unit are against $UNIT_BASE, never main.
+$skills_block
 
 Read the spec's "## Progress" section FIRST. Its checklist says which phases are built, and the
 notes under it are what the sessions before you learned that the spec does not say. Then read this
@@ -1882,9 +1905,12 @@ print_plan() {
   fi
   log "state:  $(probe_run "$BRANCH")"
   log "phases: $PHASE_COUNT, one session each, then 3 closing sessions: docs, review, archive (MAX_SESSIONS=$MAX_SESSIONS)"
+  local skills
   while IFS='|' read -r done_flag phase title; do
     [ -n "$phase" ] || continue
     printf '  [%s] %s — %s\n' "$done_flag" "$phase" "$title"
+    skills="$(phase_skills "$phase")"
+    [ -z "$skills" ] || printf '      skills: %s\n' "$skills"
   done < "$PHASES"
 }
 
@@ -2005,7 +2031,7 @@ while :; do
   if [ -n "$NEXT" ]; then
     PHASE="${NEXT%%|*}"
     TITLE="${NEXT#*|}"
-    FRESH="$(phase_prompt "$SPEC" "$UNIT" "$BRANCH" "$PHASE" "$TITLE" "$STATUS_FILE")"
+    FRESH="$(phase_prompt "$SPEC" "$UNIT" "$BRANCH" "$PHASE" "$TITLE" "$STATUS_FILE" "$(phase_skills "$PHASE")")"
     if [ -n "$RESUME_ID" ]; then
       log "$UNIT: session $SESSIONS continues the interrupted $PHASE — $TITLE"
       run_session "$(continuation_prompt "$SPEC" "$UNIT" "$BRANCH" "$PHASE" "$TITLE" "$STATUS_FILE")" \

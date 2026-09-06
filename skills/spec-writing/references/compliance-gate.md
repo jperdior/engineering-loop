@@ -21,6 +21,7 @@ a pass.
 | Progress | Is there a `## Progress` section opening with one `- [ ] **Phase N** — title` line per phase, in the order and with the titles of `## Phasing`? | Yes. Every unindented checkbox in the section is a phase line; notes are prose under `_Notes:_`. |
 | Phase size | Can each phase be built by **one fresh session** — one seam, one module, the files it must open named in its own section? | Yes. A phase that needs half the tree read first is two phases. |
 | Tests | Does each phase name the tests that prove it, in the frameworks and at the paths the host uses? | Yes. A phase whose tests live in another phase is not independently verifiable. |
+| Skills | Does each phase's section carry a `- **Skills:**` line naming the host skills its deliverables call for, each a backticked name that resolves to a skill the host has? | Yes, or the line is absent because nothing in the host's skill index applies. `.loop/parse-ledger.sh <spec> --skills "Phase N"` must exit 0 for every phase. A deliverable the index covers with no skill named, or a name that resolves to nothing, is High. |
 | Gates | Does each phase end with the host's `LOOP_GATES` green and the app in a working state? | Yes. |
 | Contracts | Does every endpoint with a body carry an explicit JSON example with exact field names? | Yes. |
 | BC | Is any contract surface removed or renamed without a deprecation bridge? | No. |
