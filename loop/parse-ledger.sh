@@ -5,8 +5,19 @@
 #   parse-ledger.sh <spec>                     the `## Delivery` ledger:  done|unit|branch
 #   parse-ledger.sh <spec> --phases            the `## Progress` checklist: done|phase|title
 #   parse-ledger.sh <spec> --skills "Phase N"  the host skills that phase names, one per line
+#   parse-ledger.sh <spec> --gates             the `## Gates` commands, one per line
+#   parse-ledger.sh <spec> --host <key>        one `## Gates` detail: cleanup | excludes | denials
 #
 # Called by /implement-spec, /archive-spec and the delivery loop. One grammar, one implementation.
+#
+# `## Gates` is the host contract, written into every spec by /spec-writing from the repository's own
+# docs and read by the loop from the branch, like the phases. Each unindented `- `command`` line is
+# one gate, run from the repo root in that order; a list item with no backticked command is
+# malformed. Three optional italic-labelled lines carry the rest, each a list of backticked values:
+# `_Cleanup:_` (a command run inside a worktree before it is removed), `_Excludes:_` (generated
+# paths left out of the size), `_Denials:_` (tools a session may never run). `--gates` exits 3 when
+# the section is absent or names none: a spec without gates is a spec the loop must not build.
+# `--host` prints nothing and exits 0 when the line is absent.
 #
 # `done` is `x` or a space. A ledger row's `unit` is the label (`PR 1`) and `branch` the first
 # backticked name after it. A phase row's `phase` is the label (`Phase 2`) and `title` the text after
@@ -39,23 +50,79 @@ SPEC=""
 SECTION="Delivery"
 LABEL="PR"
 SKILLS_OF=""
+GATES=0
+HOST_KEY=""
+
+usage() { echo "usage: parse-ledger.sh <spec-file> [--phases | --skills \"Phase N\" | --gates | --host cleanup|excludes|denials]" >&2; exit 2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --phases) SECTION="Progress"; LABEL="Phase" ;;
-    --skills) [ -n "${2:-}" ] || { echo "usage: parse-ledger.sh <spec-file> --skills \"Phase N\"" >&2; exit 2; }
-              SKILLS_OF="$2"; shift ;;
+    --skills) [ -n "${2:-}" ] || usage; SKILLS_OF="$2"; shift ;;
+    --gates)  GATES=1 ;;
+    --host)   case "${2:-}" in cleanup|excludes|denials) HOST_KEY="$2" ;; *) usage ;; esac; shift ;;
     -*)       echo "parse-ledger: unknown option '$1'" >&2; exit 2 ;;
-    *)        [ -z "$SPEC" ] || { echo "usage: parse-ledger.sh <spec-file> [--phases | --skills \"Phase N\"]" >&2; exit 2; }; SPEC="$1" ;;
+    *)        [ -z "$SPEC" ] || usage; SPEC="$1" ;;
   esac
   shift
 done
 
-[ -n "$SPEC" ] || { echo "usage: parse-ledger.sh <spec-file> [--phases | --skills \"Phase N\"]" >&2; exit 2; }
+[ -n "$SPEC" ] || usage
 
 if [ ! -f "$SPEC" ]; then
   echo "parse-ledger: no such spec: $SPEC" >&2
   exit 3
+fi
+
+if [ "$GATES" = 1 ] || [ -n "$HOST_KEY" ]; then
+  awk -v want_gates="$GATES" -v host_key="$HOST_KEY" '
+    BEGIN {
+      open_re = "^[[:space:]]*##[[:space:]]+Gates"
+      gate_re = "^- "
+      if (host_key == "cleanup")  label = "Cleanup"
+      if (host_key == "excludes") label = "Excludes"
+      if (host_key == "denials")  label = "Denials"
+      host_re = "^[[:space:]]*(_|\\*\\*)" label ":?(_|\\*\\*):?"
+    }
+    /^[[:space:]]*```+[^`]*$/        { infence = !infence; next }
+    infence                          { next }
+    $0 ~ open_re                     { seen = 1; f = 1; next }
+    /^[[:space:]]*#{1,4}[[:space:]]/ { f = 0 }
+    !f                               { next }
+
+    want_gates && $0 ~ gate_re {
+      rest = $0
+      if (!match(rest, /`[^`]+`/)) {
+        printf "parse-ledger: a ## Gates item names no backticked command: %s\n", $0 > "/dev/stderr"
+        exit 3
+      }
+      print substr(rest, RSTART + 1, RLENGTH - 2)
+      gates++
+      next
+    }
+    host_key != "" && $0 ~ host_re {
+      rest = $0
+      sub(host_re, "", rest)
+      while (match(rest, /`[^`]+`/)) {
+        print substr(rest, RSTART + 1, RLENGTH - 2)
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      exit 0
+    }
+
+    END {
+      if (!want_gates) exit 0
+      if (!seen) {
+        print "parse-ledger: no ## Gates section" > "/dev/stderr"
+        exit 3
+      }
+      if (gates == 0) {
+        print "parse-ledger: the ## Gates section names no gate; each is one line: - `command`" > "/dev/stderr"
+        exit 3
+      }
+    }
+  ' "$SPEC"
+  exit $?
 fi
 
 if [ -n "$SKILLS_OF" ]; then

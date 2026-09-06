@@ -58,6 +58,14 @@ No Skills line: the host has none that apply to this phase.
 - [ ] **Phase 3** — the wiring
 
 _Notes:_ not started.
+
+## Gates
+
+- `make lint`
+- `make test`
+
+_Cleanup:_ `make clean-worktree`
+_Denials:_ `Bash(make deploy)`
 SPEC
 }
 
@@ -80,6 +88,11 @@ write_spec2() {
 - [ ] **Phase 3** — the wiring
 
 _Notes:_ not started.
+
+## Gates
+
+- `make lint`
+- `make test`
 SPEC
 }
 
@@ -96,9 +109,7 @@ fresh() {
   for s in delivery-loop parse-ledger unit-size comment-ratio reclaim-worktree; do
     cp "$REPO_ROOT/loop/$s.sh" "$REPO/.loop/"
   done
-  cp "$REPO_ROOT/loop/loop.env.dist" "$REPO_ROOT/loop/host.env.dist" "$REPO/.loop/"
-  # The host contract is committed, like a real host's: the gates the stubbed `make` answers to.
-  printf 'LOOP_GATES=make lint;make test\n' > "$REPO/.loop/host.env"
+  cp "$REPO_ROOT/loop/loop.env.dist" "$REPO/.loop/"
   write_spec "$REPO"
   # The real repo ignores every path the loop writes to, so a driver tree stays clean while a run is
   # in flight. Without this the fixture reports the loop's own state as uncommitted work and the
@@ -130,6 +141,8 @@ fresh() {
   : > "$LOOP_TEST_DIR/resumes.txt"
   : > "$LOOP_TEST_DIR/record-ids.txt"
   : > "$LOOP_TEST_DIR/skills.txt"
+  : > "$LOOP_TEST_DIR/denials.txt"
+  : > "$LOOP_TEST_DIR/make-targets.txt"
 }
 
 run_loop() {
@@ -1347,24 +1360,25 @@ else fail "$(grep bounds "$TMP/out")"; fi
 
 # --------------------------------------------------------------------------- the host contract
 
-# The gates are a fact about the repository, committed in host.env, and a developer's gitignored
-# loop.env cannot quietly change them: host.env is read first, and first writer wins.
-CASE="the gates come from the committed host.env, over loop.env"
-fresh hostenv
-printf 'LOOP_GATES=make nothing-of-the-sort\n' > "$REPO/.loop/loop.env"
-if run_loop --dry-run && grep -q "gates:  make lint;make test (.loop/host.env)" "$TMP/out"; then pass
-else fail "$(grep gates "$TMP/out")"; fi
+# The contract is the spec's: derived from the host's docs when the spec was written, approved with
+# it, read from the branch like the phases. Nothing about the host is configured for the loop.
+CASE="the gates come from the spec's ## Gates section"
+fresh specgates
+if run_loop --dry-run && grep -q "gates:  make lint;make test (the spec)" "$TMP/out" \
+   && grep -q "cleanup: make clean-worktree" "$TMP/out" \
+   && grep -q "denials: Bash(make deploy)" "$TMP/out"; then pass
+else fail "$(grep -E 'gates|cleanup|denials' "$TMP/out")"; fi
 
-# There is no default gate. A repository that declares none has not been read yet, and building a
-# unit against a gate nobody chose is worse than refusing.
-CASE="a repository that declares no gates is refused, naming the file"
+# There is no default gate. Building a unit against a gate nobody chose is worse than refusing.
+CASE="a spec that declares no gates is refused"
 fresh nogates
-git -C "$REPO" rm -q .loop/host.env
-git -C "$REPO" commit -qm "no contract"
+awk '/^## Gates/ { skip = 1 } /^## / && !/^## Gates/ { skip = 0 } !skip { print }' "$REPO/$SPEC_REL" \
+  > "$REPO/$SPEC_REL.tmp" && mv "$REPO/$SPEC_REL.tmp" "$REPO/$SPEC_REL"
+git -C "$REPO" add -A && git -C "$REPO" commit -qm "a spec with no gates"
 set +e
 run_loop; rc=$?
 set -e
-if [ "$rc" = 3 ] && grep -q "no gates declared" "$TMP/err" && grep -q "host.env" "$TMP/err" \
+if [ "$rc" = 3 ] && grep -q "declares no gates" "$TMP/err" && grep -q "## Gates" "$TMP/err" \
    && ! remote_has feat-one; then pass
 else fail "exit $rc: $(tail -3 "$TMP/err")"; fi
 
@@ -1372,6 +1386,18 @@ CASE="a shell override of the gates is reported as such"
 fresh shellgates
 if LOOP_GATES="make lint" run_loop --dry-run && grep -q "gates:  make lint (the shell)" "$TMP/out"; then pass
 else fail "$(grep gates "$TMP/out")"; fi
+
+# The spec's cleanup reaches the reclaim, and its denials reach every session's launch. The stubs
+# record what they were handed; both are read from the spec, so a happy run is the proof.
+CASE="the cleanup the spec names runs inside the worktree before it is reclaimed"
+fresh speccleanup
+if run_loop && grep -qx 'clean-worktree' "$LOOP_TEST_DIR/make-targets.txt"; then pass
+else fail "make targets: $(sort -u "$LOOP_TEST_DIR/make-targets.txt" | tr '\n' ' ')"; fi
+
+CASE="the denials the spec names are handed to every session"
+if [ "$(grep -cx 'Bash(make deploy)' "$LOOP_TEST_DIR/denials.txt")" = 7 ] \
+   && grep -qx 'Bash(gh pr merge \*)' "$LOOP_TEST_DIR/denials.txt"; then pass
+else fail "$(grep -c 'make deploy' "$LOOP_TEST_DIR/denials.txt") of 7 launches carried the spec's denial"; fi
 
 # --------------------------------------------------------------------------- the env file
 
@@ -1405,13 +1431,10 @@ if grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' loop/loop.env.dist \
    && git check-ignore -q .loop/loop.env; then pass
 else fail "template incomplete, or the real file is not gitignored"; fi
 
-# The contract is the host's, so its template carries the gates and its real file is NOT ignored;
-# the personal template carries no gate at all.
-CASE="the host contract template names the gates, and the real file is committed"
-if grep -q '^LOOP_GATES=' loop/host.env.dist \
-   && ! grep -q '^LOOP_GATES=' loop/loop.env.dist \
-   && ! git check-ignore -q .loop/host.env; then pass
-else fail "host.env.dist lacks LOOP_GATES, loop.env.dist still carries it, or host.env is ignored"; fi
+# The contract is the spec's, so no template carries a gate and there is no host file to configure.
+CASE="no template carries the host contract"
+if ! grep -q '^LOOP_GATES=' loop/loop.env.dist && [ ! -e loop/host.env.dist ]; then pass
+else fail "loop.env.dist carries LOOP_GATES, or host.env.dist is back"; fi
 
 # --------------------------------------------------------------------------- the harness itself
 

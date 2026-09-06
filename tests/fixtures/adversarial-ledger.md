@@ -70,3 +70,24 @@ Prose mentioning **Skills:** `decoy-in-prose` before any phase section; it belon
 ### Phase 3 — the wiring, with no Skills line at all
 
 - **Build:** the wiring.
+
+## Gates
+
+Prose before the list, mentioning `make decoy` in backticks; not a list item, not a gate.
+
+- `make lint`
+- `make test` — a trailing note is not a second gate
+  - `make nested` is indented and not a gate
+
+_Cleanup:_ `make clean-worktree`
+_Excludes:_ `api/openapi.json`, `web/messages/*.json`
+**Denials:** `Bash(make migrate)`, `Bash(* doctrine:migrations:migrate*)`
+
+```markdown
+- `make fenced`
+_Cleanup:_ `make fenced-cleanup`
+```
+
+## After the gates
+
+- `make after` is a list item in another section

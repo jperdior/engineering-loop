@@ -115,6 +115,31 @@ analysis and 2-3 alternative designs with trade-offs.
     `/implement-spec` ticks each phase as it lands; `/archive-spec` ticks the ledger and moves the
     spec to `.ai/specs/implemented/` once no unit is left unticked.
 
+    Then declare a `## Gates` section — **the host contract, derived from the host's own docs, every
+    time**. Read the root `AGENTS.md` / `CLAUDE.md`: the commands its validation section names as
+    what must be green before a PR are the gates, in that order, one backticked command per line.
+    Three optional italic-labelled lines carry the rest, each from something the docs say:
+
+    ```markdown
+    ## Gates
+
+    - `make lint`
+    - `make test`
+
+    _Cleanup:_ `make clean-worktree`
+    _Excludes:_ `apps/api/openapi.json`, `packages/api-client-ts/src/types.gen.ts`
+    _Denials:_ `Bash(make migrate)`, `Bash(* doctrine:migrations:migrate*)`
+    ```
+
+    `_Cleanup:_` is the per-worktree teardown the docs name (a stack to drop, a cache keyed by
+    directory); `_Excludes:_` the generated paths the docs say nobody reviews; `_Denials:_` the
+    commands the docs mark as never run by an agent, as Claude Code permission patterns. Omit a line
+    the docs give no basis for. Only commands the docs name — never a guess and never a default.
+    `.loop/parse-ledger.sh <spec> --gates` reads the list; the loop runs it in every session and once
+    more on the host, and refuses a spec that declares none. This is why nothing about the host is
+    configured in a file for the loop's sake: the contract is re-derived with each spec and approved
+    with it, so a change to the host's docs reaches the next feature without anyone editing config.
+
 8. **Risks & Impact**: document concrete failure scenarios (severity, affected area, mitigation, residual risk).
 9. **Integration Coverage**: list the tests that must exist for the new behaviour, in the frameworks and at the paths the host repository already uses.
 10. **Compliance gate**: apply [references/compliance-gate.md](references/compliance-gate.md).

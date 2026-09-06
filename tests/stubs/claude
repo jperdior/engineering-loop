@@ -56,6 +56,9 @@ while [ $# -gt 0 ]; do
     --model)      model="$2"; shift ;;
     --session-id) session_id="$2"; shift ;;
     --resume)     resume_id="$2"; shift ;;
+    # The denials are the last thing on the command line, one pattern per argument. Recorded so a
+    # case can assert that what the spec named reached the launch.
+    --disallowedTools) shift; printf '%s\n' "$@" >> "$LOOP_TEST_DIR/denials.txt"; break ;;
   esac
   shift
 done
@@ -182,7 +185,10 @@ else
   # phase label, which breaks the checklist grammar. The loop must read that as a failure to parse,
   # never as "nothing left unticked".
   if [ "$mode" = notebox ] && [ -f "$spec" ]; then
-    printf '%s\n' '- [ ] remember to tell the next session about the fixture' >> "$spec"
+    # Under ## Progress, right after the notes: appending at the end of the file would land it in
+    # whatever section is last, which is not the checklist this case exists to break.
+    awk '{ print } /^_Notes:_/ { print "- [ ] remember to tell the next session about the fixture" }' \
+      "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
   fi
   # `archived` is what /archive-spec really does on the last unit: the ticked spec is MOVED to
   # .ai/specs/implemented/, so nothing is left at the path the loop was given.

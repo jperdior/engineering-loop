@@ -12,14 +12,14 @@
 #   --force-unlock  take THIS UNIT's lock when this script refuses to reclaim it on its own. It
 #                   cannot take one the unit's own session is still behind.
 #
-# Settings are environment variables, read from two files. `.loop/host.env` is COMMITTED and holds
-# the host's contract -- facts about the repository, the same for everyone who builds in it.
-# `.loop/loop.env` is gitignored and holds what is personal: the sandbox tokens and per-developer
-# knobs. The shell wins over both, host.env wins over loop.env. The main ones:
+# The host contract -- the gates, the per-worktree cleanup, the generated paths, the extra denials
+# -- is read from the SPEC's `## Gates` section, on the branch, like the phases. /spec-writing
+# derives it from the repository's own docs every time a spec is written, and the human approves it
+# with the rest of the spec. Nothing about the host is configured in a file for this loop's sake.
 #
-#   LOOP_GATES="make lint;make test"  host.env: the gates, run from the repo root in this order.
-#                                     Required -- pre-flight refuses a run that declares none.
-#   LOOP_CLEAN_WORKTREE, LOOP_SIZE_EXCLUDES, LOOP_DENIALS_EXTRA   host.env, optional.
+# Settings are environment variables, read from the gitignored `.loop/loop.env` (see loop.env.dist):
+# the sandbox tokens and per-developer knobs. The shell wins over the file. The main ones:
+#
 #   LOOP_MODEL=opus                   the model of every build session; the PR session runs on sonnet.
 #   MAX_SESSIONS=<phases>+4           sessions per invocation before the unit is declared non-converging.
 #   UNIT_TIMEOUT=7200                 seconds per session, enforced by timeout(1).
@@ -118,16 +118,11 @@ esac
 
 # ---------------------------------------------------------------------------- configuration file
 #
-# Two files, one grammar. `.loop/host.env` is the host's contract and is committed: the gates, the
-# per-worktree cleanup, the generated paths, the extra denials -- written once, by /ship from the
-# host's own AGENTS.md or by hand, and reviewed like any other file. `.loop/loop.env` is gitignored
-# and personal: the two sandbox credentials and per-developer knobs. A value already exported in the
-# shell is never overwritten, so `LOOP_MODEL=sonnet .loop/delivery-loop.sh …` still works, and
-# host.env is read before loop.env so a developer's file cannot quietly change what the gates are.
-#
-# Each is read from the driver first, then the main checkout, first writer winning: loop.env is
-# gitignored, so a worktree the loop is driven from has none of its own, and without the second read
-# an in-place run would find no settings at all.
+# `.loop/loop.env` is gitignored and personal: the two sandbox credentials and per-developer knobs.
+# A value already exported in the shell is never overwritten, so `LOOP_MODEL=sonnet
+# .loop/delivery-loop.sh …` still works. It is read from the driver first, then the main checkout,
+# first writer winning: a worktree the loop is driven from has none of its own, and without the
+# second read an in-place run would find no settings at all.
 #
 # `secret` marks a file that holds tokens and should not be readable beyond its owner.
 load_env_file() {
@@ -153,12 +148,11 @@ load_env_file() {
 }
 
 # Where the gates came from is reported by --dry-run: a run whose gates were a shell override and a
-# run reading the committed contract produce the same PR, and only this line tells them apart.
+# run reading the spec produce the same PR, and only this line tells them apart. The override exists
+# for the harness and for a one-off; the spec is the source.
 LOOP_GATES_FROM=""
 [ -z "${LOOP_GATES:-}" ] || LOOP_GATES_FROM="the shell"
 
-load_env_file "$LOOP_DIR/host.env"
-[ "$MAIN_ROOT" = "$ROOT" ] || load_env_file "$MAIN_ROOT/.loop/host.env"
 load_env_file "$LOOP_DIR/loop.env" secret
 [ "$MAIN_ROOT" = "$ROOT" ] || load_env_file "$MAIN_ROOT/.loop/loop.env" secret
 
@@ -168,6 +162,9 @@ load_env_file "$LOOP_DIR/loop.env" secret
 # and checks the tick when that process exits. SESSION_CONTEXT_ALARM is a reading on the telemetry,
 # not a limit.
 LOOP_GATES="${LOOP_GATES:-}"
+LOOP_CLEAN_WORKTREE="${LOOP_CLEAN_WORKTREE:-}"
+LOOP_SIZE_EXCLUDES="${LOOP_SIZE_EXCLUDES:-}"
+LOOP_DENIALS_EXTRA="${LOOP_DENIALS_EXTRA:-}"
 LOOP_MODEL="${LOOP_MODEL:-opus}"
 PR_MODEL="sonnet"
 SESSION_CONTEXT_ALARM="${SESSION_CONTEXT_ALARM:-150000}"
@@ -237,10 +234,14 @@ LOOP_DENIALS=(
   "Bash(docker volume rm *)" "Bash(docker volume prune *)"
   "Bash(kubectl *)" "Bash(helm *)"
 )
-# The host adds its own through LOOP_DENIALS_EXTRA: `Bash(...)` patterns separated by semicolons.
-while IFS= read -r __d; do [ -z "$__d" ] || LOOP_DENIALS+=("$__d"); done <<EOF
-$(printf '%s' "${LOOP_DENIALS_EXTRA:-}" | tr ';' '\n')
+# The host adds its own through the spec's `_Denials:_` line (or LOOP_DENIALS_EXTRA in the shell):
+# `Bash(...)` patterns separated by semicolons. Appended once the spec has been read.
+add_extra_denials() {
+  local d
+  while IFS= read -r d; do [ -z "$d" ] || LOOP_DENIALS+=("$d"); done <<EOF
+$(printf '%s' "$LOOP_DENIALS_EXTRA" | tr ';' '\n')
 EOF
+}
 TIMEOUT_BIN=""
 ESCALATED=0
 PAUSED=0
@@ -433,17 +434,6 @@ preflight() {
 
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || { warn "missing required binary: $CLAUDE_BIN"; missing=1; }
 
-  # The gates are the host's to declare and the loop's to run; a default here would let a repository
-  # with no contract build a whole unit against a gate nobody chose. The file is committed, so its
-  # absence is a fact about the repository, not about this developer.
-  if [ -z "$LOOP_GATES" ]; then
-    warn "no gates declared. The host contract lives in .loop/host.env (committed), with at least:"
-    warn "  LOOP_GATES=<the commands that must be green, separated by ;>"
-    warn "/ship writes that file from the repository's AGENTS.md on first run; .loop/host.env.dist"
-    warn "shows the format for writing it by hand."
-    missing=1
-  fi
-
   if ! gh auth status >/dev/null 2>&1; then
     warn "gh is not authenticated. Run: gh auth status"
     missing=1
@@ -598,7 +588,47 @@ preflight() {
     PHASE_COUNT="$(wc -l < "$PHASES" | tr -d ' ')"
     # One per phase, one per closing step, one spare.
     [ -n "$MAX_SESSIONS" ] || MAX_SESSIONS=$((PHASE_COUNT + 4))
+    refresh_contract || return 1
   fi
+  return 0
+}
+
+# The host contract, from the spec's `## Gates` on the branch. The gates are required: a default
+# here would let a spec that declares none build a whole unit against a gate nobody chose. The three
+# details are optional. A shell value wins, which is what the harness and a one-off use; the source
+# is reported either way. The values are exported because reclaim-worktree.sh and unit-size.sh read
+# them from the environment.
+join_with() {
+  awk -v sep="$1" 'NF { printf "%s%s", (n++ ? sep : ""), $0 }'
+}
+
+refresh_contract() {
+  local tmp="$PHASES.spec" gates
+  spec_on_branch "$tmp"
+
+  if [ -z "$LOOP_GATES" ]; then
+    if ! gates="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --gates 2>"$PHASES.err")"; then
+      warn "$SPEC declares no gates: its ## Gates section is missing, empty or malformed."
+      sed 's/^/  /' "$PHASES.err" >&2
+      warn "/spec-writing writes that section from the repository's own validation commands, one"
+      warn "backticked command per line; the loop will not build a unit against gates nobody chose."
+      rm -f "$tmp"
+      return 1
+    fi
+    LOOP_GATES="$(printf '%s\n' "$gates" | join_with ';')"
+    LOOP_GATES_FROM="the spec"
+  fi
+
+  [ -n "$LOOP_CLEAN_WORKTREE" ] \
+    || LOOP_CLEAN_WORKTREE="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --host cleanup 2>/dev/null | head -1 || true)"
+  [ -n "$LOOP_SIZE_EXCLUDES" ] \
+    || LOOP_SIZE_EXCLUDES="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --host excludes 2>/dev/null | join_with ' ' || true)"
+  [ -n "$LOOP_DENIALS_EXTRA" ] \
+    || LOOP_DENIALS_EXTRA="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --host denials 2>/dev/null | join_with ';' || true)"
+  export LOOP_CLEAN_WORKTREE LOOP_SIZE_EXCLUDES LOOP_DENIALS_EXTRA
+  rm -f "$tmp"
+
+  add_extra_denials
   return 0
 }
 
@@ -1957,7 +1987,10 @@ if [ "$DRY_RUN" = 1 ]; then
   # LOOP_SANDBOX is reported because a host run and a container run produce the same PR; left out,
   # a run believed sandboxed and one that was not would be indistinguishable.
   log "bounds: MAX_SESSIONS=${MAX_SESSIONS:-—} UNIT_TIMEOUT=${UNIT_TIMEOUT}s SESSION_CONTEXT_ALARM=$SESSION_CONTEXT_ALARM"
-  log "gates:  $LOOP_GATES (${LOOP_GATES_FROM#"$ROOT"/})"
+  log "gates:  ${LOOP_GATES:-none} (${LOOP_GATES_FROM#"$ROOT"/})"
+  [ -z "$LOOP_CLEAN_WORKTREE" ] || log "cleanup: $LOOP_CLEAN_WORKTREE, inside the worktree before it is removed"
+  [ -z "$LOOP_SIZE_EXCLUDES" ]  || log "excludes: $LOOP_SIZE_EXCLUDES"
+  [ -z "$LOOP_DENIALS_EXTRA" ]  || log "denials: $LOOP_DENIALS_EXTRA, beyond the built-in list"
   log "models: build sessions on $LOOP_MODEL, the PR session on $PR_MODEL"
   if [ "$LOOP_SANDBOX" = "1" ]; then
     log "sandbox: ON — sessions run in $LOOP_IMAGE"

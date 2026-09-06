@@ -127,13 +127,8 @@ check "every exclusion holds, from a subdirectory" "$TMP/repo/deep/sub/dir" 0 "$
 # line count does not predict what a unit costs -- context does, driven by what a unit READS.
 check "a large unit still exits 0" "$TMP/repo" 0 "$EXPECTED" LOOP_SIZE_EXCLUDES="$HOST_EXCLUDES" GUIDE_POST_LINES=1
 
-printf 'LOOP_SIZE_EXCLUDES=%s\n' "$HOST_EXCLUDES" > "$TMP/repo/.loop/host.env"
-check "the excludes are read from the committed .loop/host.env" "$TMP/repo" 0 "$EXPECTED" IGNORE=1
-rm -f "$TMP/repo/.loop/host.env"
-
-printf 'LOOP_SIZE_EXCLUDES=%s\n' "$HOST_EXCLUDES" > "$TMP/repo/.loop/loop.env"
-check "the excludes fall back to .loop/loop.env" "$TMP/repo" 0 "$EXPECTED" IGNORE=1
-rm -f "$TMP/repo/.loop/loop.env"
+# The excludes come from the environment only, which the cases above exercise: the loop exports them
+# from the spec's `_Excludes:_` line, and no file under .loop/ is read for them.
 
 set +e
 "$TMP/repo/.loop/unit-size.sh" no-such-ref >/dev/null 2>&1

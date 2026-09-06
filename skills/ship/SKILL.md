@@ -51,22 +51,24 @@ common case, not the exception.
 
 ## Phase A — from a sentence to an approved spec
 
-0. **The host contract.** If `.loop/host.env` is missing, or sets no `LOOP_GATES`, write it
-   before anything else — the loop refuses to run without it, and the gates are a fact about the
-   repository that its own docs already state. Read the root `AGENTS.md` / `CLAUDE.md` and derive:
-   - `LOOP_GATES` — the commands its validation section names as what must be green before a PR,
-     in that order, joined with `;`. Only commands the docs name; never a guess.
-   - `LOOP_CLEAN_WORKTREE` — the per-worktree teardown the docs name, if any (a stack to drop, a
-     cache keyed by directory). Omit when the host has none.
-   - `LOOP_SIZE_EXCLUDES` — generated paths the docs say nobody reviews (an OpenAPI dump, a generated
-     client, message catalogs). Omit when none.
-   - `LOOP_DENIALS_EXTRA` — commands the docs mark as never run by an agent (deploys, migrations
-     against a live database, production shells). Omit when none.
+0. **Tools and credentials, before anything else.** A loop that fails on these fails hours in,
+   with nobody watching. Check, and stop on the first that fails:
+   - `gh auth status`. If it fails, tell the user to run `gh auth login` — or `gh auth switch
+     --user <account>` when the repository belongs to another of their accounts — in their
+     terminal.
+   - `jq`, and `timeout` or `gtimeout`, on PATH. Name the install line otherwise
+     (`brew install coreutils jq` on macOS).
+   - When `.loop/loop.env` sets `LOOP_SANDBOX=1`, run `.loop/setup-loop.sh --show`: it reports
+     which of the two tokens are set without printing a value. If either is missing, tell the user
+     to run `.loop/setup-loop.sh` in their own terminal. Say what it will ask for, so they can
+     have both ready: the token `claude setup-token` prints (their own subscription, valid about a
+     year), and a fine-grained GitHub personal access token scoped to **this repository** with
+     *Contents: read and write* and *Pull requests: read and write*. The script explains each at
+     the prompt, reads them without echoing, and writes `.loop/loop.env` at 0600.
 
-   Show the user the lines you derived and the sentence in the docs each came from, then write
-   `.loop/host.env` from `.loop/host.env.dist` and commit it on the feature branch — it reaches
-   `main` in the unit's PR, reviewed. This runs once per repository; when the file exists and
-   names its gates, skip this step.
+   **Never ask for a token value in the chat**, and never accept one pasted there: a token in a
+   message lands in the transcript. The script exists so the values never pass through a
+   conversation.
 
 1. **Interview.** Invoke `superpowers:brainstorming`. This is the one place the
    user's attention is worth most, so spend it here: scope, the decisions with
@@ -81,13 +83,15 @@ common case, not the exception.
    work, state in the ledger, and mention in your Phase A report. It is not a menu.
 2. **Worktree.** `/new-feature feat-<slug>`. This is the branch the loop builds
    on and the tree it builds in — no suffix, and no second worktree later.
-3. **Draft.** `/spec-writing`. Two things the loop reads: the `## Delivery`
-   ledger — **one unit**, whose backticked branch must be **this** branch — and
-   the phase checklist under `## Progress`, which is what the loop hands to each
-   session and checks when it exits. The phases are the sessions: cut each one to
-   what a single fresh session can read and build. Each phase's section names the
-   **host's skills** it must use, resolved from the repository's skill index; the
-   user reads that resolution at gate 1, and the loop hands it to the session.
+3. **Draft.** `/spec-writing`. Three things the loop reads: the `## Delivery`
+   ledger — **one unit**, whose backticked branch must be **this** branch; the
+   phase checklist under `## Progress`, which is what the loop hands to each
+   session and checks when it exits; and the `## Gates` section, the host's own
+   validation commands derived from its `AGENTS.md` / `CLAUDE.md` for this spec,
+   which every session runs and the loop re-runs on the host. The phases are the
+   sessions: cut each one to what a single fresh session can read and build. Each
+   phase's section names the **host's skills** it must use, resolved from the
+   repository's skill index. The user reads all of it at gate 1.
 4. **Audit.** `/pre-implement-spec .ai/specs/{file}.md`. Four parallel agents.
 5. **Revise until the verdict is "ready".** Fix what it found; re-run it if the
    findings were structural. Do not carry Critical or High findings forward.
@@ -120,32 +124,48 @@ bounds a session is the phase it is given.
    ```sh
    .loop/delivery-loop.sh .ai/specs/{file}.md --dry-run
    ```
-   Show the user the plan: the unit, its branch, its phases with their ticks, the
-   models, the bounds. It creates nothing.
-2. **Build.**
+   Show the user the plan: the unit, its branch, its phases with their ticks and
+   skills, the gates and where they came from, the models, the bounds. It creates
+   nothing and finishes in seconds, so it runs in the foreground.
+2. **Build, detached.** The run lasts longer than any tool call may, and it must
+   outlive this chat session: a foreground command times out, and a plain
+   background job is killed when the session ends or the machine is short of
+   memory. So the loop is started as its own process group, with its output in a
+   log outside the repository, and the session only watches:
    ```sh
-   .loop/delivery-loop.sh .ai/specs/{file}.md
+   mkdir -p ~/.loop-runs
+   LOG=~/.loop-runs/$(basename "$(git rev-parse --show-toplevel)")-$(git branch --show-current).log
+   ( set -m; nohup bash -c '.loop/delivery-loop.sh "$1"; echo "delivery-loop: exit $?"' _ .ai/specs/{file}.md \
+       >"$LOG" 2>&1 & echo $! >"$LOG.pid" )
    ```
-   The loop runs one fresh `claude -p` per unticked phase in this worktree, on
-   `LOOP_MODEL` (default `opus`). Each session implements its phase
-   directly, runs the gates, commits, ticks the phase under `## Progress`,
+   Tell the user the log path and that the run survives closing this chat. Then
+   watch the log — `tail -f` through a monitor, or by reading it when asked — for
+   the lines the loop prints and relay each in one sentence as it lands:
+   `session N builds Phase …`, `… is ticked and pushed`, `runs the closing step`,
+   `paused:`, `ESCALATE`, `open and waiting for review`, and the final
+   `delivery-loop: exit N`. Do not narrate the log; report the events.
+
+   What the loop does meanwhile: one fresh `claude -p` per unticked phase in this
+   worktree, on `LOOP_MODEL` (default `opus`). Each session implements its phase
+   directly, runs the spec's gates, commits, ticks the phase under `## Progress`,
    rewrites the notes beneath the checklist, pushes and writes `CONTINUE`. The
    loop reads the tick from origin — a `CONTINUE` whose phase is not ticked is an
    escalation, not progress. When no phase is left, three closing sessions run in
    turn, each fresh: `/sync-context-docs`, then `/code-review` with its fix wave,
-   then `/archive-spec`, which writes `OK`;
-   the loop then runs `LOOP_GATES` **itself** rather than trusting the session's
-   report, opens one PR on `sonnet`, attests it on origin, and records the tick
-   with the measurements and the PR number.
-3. **Report and stop.** The PR, what the loop verified, and — from
-   `.ai/telemetry/<spec>/` — one row per session: turns, cost, peak context
-   against `SESSION_CONTEXT_ALARM`, wall clock, model. Then wait; merging is the
-   user's gate.
+   then `/archive-spec`, which writes `OK`. The loop then runs the gates
+   **itself** rather than trusting the session's report, opens one PR on
+   `sonnet`, attests it on origin, and records the tick with the measurements and
+   the PR number.
+3. **Report and stop** when the exit line arrives. `exit 0`: the PR, what the
+   loop verified, and — from `.ai/telemetry/<spec>/` — one row per session:
+   turns, peak context against `SESSION_CONTEXT_ALARM`, wall clock, model. Then
+   wait; merging is the user's gate. `exit 5` and `exit 4` are the two sections
+   below.
 
-**The gates are the host's own.** `LOOP_GATES` in the committed `.loop/host.env` is a
-semicolon-separated list of shell commands run from the repo root, in order, written in
-Phase A step 0 from the host's own docs. The loop runs them, and so does `/run-gates`;
-there is no default.
+**The gates are the spec's, and the spec's are the host's.** The `## Gates` section
+`/spec-writing` derived from the host's docs is what every session runs and what the
+loop re-runs on the host; there is no default, and pre-flight refuses a spec without
+one. `--dry-run` prints them with their source.
 
 **If the loop pauses (exit 5), the account's usage limit is reached.** Nothing is
 wrong with the unit. Say so, and when the user says to continue, re-run the same

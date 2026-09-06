@@ -12,6 +12,9 @@
 
 set -euo pipefail
 
+# Every target is recorded, so a case can assert that the cleanup the spec named actually ran.
+printf '%s\n' "${1:-}" >> "${LOOP_TEST_DIR:-/dev/null}/make-targets.txt" 2>/dev/null || true
+
 case "${1:-}" in
   clean-worktree) exit 0 ;;
   lint|test)
