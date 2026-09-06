@@ -1,6 +1,6 @@
 ---
 name: run-gates
-description: Run the host repository's verification gate — read the gate commands the host declares in .loop/loop.env, dispatch each as a parallel subagent, and report PASS/FAIL per gate with evidence. Triggers on "run the gate", "run gates", "verify the branch", "ci gate".
+description: Run the host repository's verification gate — read the gate commands the host declares in its committed .loop/host.env (or derive them from its AGENTS.md when that file is missing), dispatch each as a parallel subagent, and report PASS/FAIL per gate with evidence. Triggers on "run the gate", "run gates", "verify the branch", "ci gate".
 ---
 
 # Run the Verification Gate
@@ -22,23 +22,29 @@ called green.
 
 ## Where the gates come from
 
-The host declares them in `.loop/loop.env`:
+The host declares them in its **committed** `.loop/host.env`:
 
 ```sh
 LOOP_GATES="make lint;make test"
 ```
 
-A semicolon-separated list of shell commands, each run **from the repository root**. That
-default is the fallback when `.loop/loop.env` is absent or sets no `LOOP_GATES`.
-
-Read the value, split it on `;`, trim each entry. Empty entries are dropped. Nothing here
-rewrites, narrows or re-orders a command: a gate is run exactly as the host wrote it.
+A semicolon-separated list of shell commands, each run **from the repository root**. Read the
+value, split it on `;`, trim each entry. Empty entries are dropped. Nothing here rewrites, narrows
+or re-orders a command: a gate is run exactly as the host wrote it.
 
 ```sh
 # shellcheck disable=SC1091
-[ -f .loop/loop.env ] && . .loop/loop.env
-printf '%s\n' "${LOOP_GATES:-make lint;make test}" | tr ';' '\n'
+[ -f .loop/host.env ] && . .loop/host.env
+printf '%s\n' "${LOOP_GATES:-}" | tr ';' '\n'
 ```
+
+**When `.loop/host.env` is missing or sets no `LOOP_GATES`, find out from the host.** Read the
+root `AGENTS.md` / `CLAUDE.md`: the commands its validation section names as what must be green
+before a PR (`make lint`, `make test`, `pnpm check`, `cargo test` …) are the gates, in the order
+it lists them. Run those, and say in the report that they were derived because `.loop/host.env`
+declares none — `/ship` writes that file on its first run, and until it exists the loop's own
+pre-flight refuses to run. Never invent a gate the host's docs do not name, and never fall back
+to a default the host did not write.
 
 ## The base
 
@@ -98,7 +104,7 @@ A compact table of gate → PASS/FAIL with evidence, plus the diff scope line.
 ## Output
 
 ```text
-Verification gate ({N} gates from .loop/loop.env)
+Verification gate ({N} gates from .loop/host.env)
   diff: {M} files changed vs {base}
   make lint                     PASS
   make test                     PASS ({K} tests)

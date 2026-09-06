@@ -5,8 +5,9 @@
 # What it puts in the host:
 #
 #   .loop/                     the engine, vendored: the scripts, the sandbox Dockerfile, the skills,
-#                              and loop.env.dist. Re-running install replaces it; loop.env and state/
-#                              are left alone.
+#                              loop.env.dist and host.env.dist. Re-running install replaces it;
+#                              host.env (the host's committed contract), loop.env and state/ are
+#                              left alone.
 #   .claude/skills/<name>      a symlink per skill into .loop/skills/<name>, so Claude Code finds them.
 #   .ai/specs/                 created empty if absent; specs live here.
 #   .gitignore                 gains .loop/loop.env, .loop/state/, .claude/worktrees/ and
@@ -46,8 +47,8 @@ echo "install: engineering loop -> $HOST/.loop"
 
 mkdir -p "$HOST/.loop/skills" "$HOST/.claude/skills" "$HOST/.ai/specs"
 
-# The engine is replaced whole; the host's own loop.env and state/ are not touched.
-cp "$SRC"/loop/*.sh "$SRC/loop/loop.env.dist" "$HOST/.loop/"
+# The engine is replaced whole; the host's own host.env, loop.env and state/ are not touched.
+cp "$SRC"/loop/*.sh "$SRC/loop/loop.env.dist" "$SRC/loop/host.env.dist" "$HOST/.loop/"
 mkdir -p "$HOST/.loop/sandbox"
 cp "$SRC/loop/sandbox/Dockerfile" "$SRC/loop/sandbox/build.sh" "$HOST/.loop/sandbox/"
 chmod +x "$HOST/.loop/"*.sh "$HOST/.loop/sandbox/build.sh"
@@ -100,10 +101,11 @@ Installed. superpowers plugin: $superpowers_note
 
 Next:
 
-  1. Set the host contract in .loop/loop.env (start from .loop/loop.env.dist):
+  1. The host contract, .loop/host.env (committed): /ship writes it from your AGENTS.md on its first
+     run and shows you the lines. Or write it by hand from .loop/host.env.dist, at least:
        LOOP_GATES=<the commands that must be green, separated by ;>    e.g. make lint;make test
   2. Optional, for unattended runs in a container:  .loop/setup-loop.sh  then  .loop/sandbox/build.sh
   3. In Claude Code:  /ship <what you want>
 
-Commit .loop/, .claude/skills/ and .gitignore.
+Commit .loop/ (host.env included), .claude/skills/ and .gitignore.
 NEXT

@@ -4,8 +4,8 @@
 #
 # The ORDER is the whole point. A host whose gates leave state named after the worktree's DIRECTORY
 # (Docker Compose project names, caches keyed by path) can only clean it up from inside that
-# directory while it still exists. LOOP_CLEAN_WORKTREE names that command (in .loop/loop.env);
-# unset, nothing runs before the removal.
+# directory while it still exists. LOOP_CLEAN_WORKTREE names that command, in the committed
+# .loop/host.env (or, failing that, .loop/loop.env); unset, nothing runs before the removal.
 #
 # Usage: reclaim-worktree.sh <worktree-path> [--dry-run]
 #
@@ -30,9 +30,11 @@ esac
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 cd "$(git -C "$LOOP_DIR" rev-parse --show-toplevel)"
 
-if [ -f "$LOOP_DIR/loop.env" ] && [ -z "${LOOP_CLEAN_WORKTREE:-}" ]; then
-  LOOP_CLEAN_WORKTREE="$(sed -n 's/^LOOP_CLEAN_WORKTREE=//p' "$LOOP_DIR/loop.env" | head -1)"
-fi
+for env_file in "$LOOP_DIR/host.env" "$LOOP_DIR/loop.env"; do
+  [ -n "${LOOP_CLEAN_WORKTREE:-}" ] && break
+  [ -f "$env_file" ] || continue
+  LOOP_CLEAN_WORKTREE="$(sed -n 's/^LOOP_CLEAN_WORKTREE=//p' "$env_file" | head -1)"
+done
 LOOP_CLEAN_WORKTREE="${LOOP_CLEAN_WORKTREE:-}"
 
 if [ ! -d "$WT_ARG" ]; then

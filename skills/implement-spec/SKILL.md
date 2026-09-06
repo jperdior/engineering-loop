@@ -162,8 +162,8 @@ This replaces SDD's generic `task-reviewer`. Every phase must pass before its li
 1. **`/sync-context-docs`** — update the docs for every directory the phase touched, and the
    spec's Changelog.
 2. **`/run-gates <base>`** — `origin/main`, or the `Base:` the loop's prompt names. It runs
-   every gate the host declares in `.loop/loop.env`, each as a parallel subagent. **Every gate
-   MUST report PASS.**
+   every gate the host declares in its committed `.loop/host.env`, each as a parallel subagent.
+   **Every gate MUST report PASS.**
 
 **Do not run `/code-review` here.** It runs once over the whole branch after all phases. A gate
 failure opens the fix loop.
