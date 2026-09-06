@@ -95,8 +95,7 @@ analysis and 2-3 alternative designs with trade-offs.
 11. **Output**: finalise the spec. If the host keeps a catalogue of domain rules or lessons, add any new rule the spec introduces to it.
 12. **Commit the spec locally** on the current `feat-<slug>` branch:
     - `git add .ai/specs/{file} && git commit -m "spec: {title}"`
-    - Driven by hand, no spec-only PR is opened: the spec travels with the implementation in the same PR, and stays in `.ai/specs/` until that PR archives it.
-    - Driven by `/ship` or the delivery loop, the spec **is** its own first PR and merges before any code is built — the loop's worktree comes from `main`, so the spec has to be there.
+    - No spec-only PR is opened, in any flow: the spec is the unit's first commit and travels with the implementation in the same PR, staying in `.ai/specs/` until that PR archives it. Under `/ship` the user reads it here and says OK; that spoken OK is gate 1, and the loop then builds in this same worktree.
     - **Auto-proceed** to `/pre-implement-spec .ai/specs/{file}.md` — the audit runs next. If gaps are found, update the spec and re-audit before coding starts.
     - After the audit passes, run `/implement-spec .ai/specs/{file}.md`.
 

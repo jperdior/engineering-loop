@@ -11,7 +11,7 @@ automated, and nothing merges itself.
 /ship <what you want>
         │
         ▼
-  interview ─▶ spec ─▶ audit ─▶ spec PR          ▣  you read it, you merge it
+  worktree ─▶ interview ─▶ spec ─▶ audit        ▣  you read the spec, you say OK
         │
         ▼
   one fresh session per spec phase ─▶ closing review ─▶ one PR
@@ -20,11 +20,11 @@ automated, and nothing merges itself.
 
 ## What it does
 
-- **Interviews you and writes a spec.** `/ship` uses a structured interview to pin down scope and
-  the decisions with more than one defensible answer, writes the spec under `.ai/specs/`, audits it
-  with four parallel agents, and opens a PR containing only the spec. You review the plan before
-  any code exists.
-- **Builds the spec one phase at a time.** Once the spec is merged, the delivery loop creates a
+- **Interviews you and writes a spec.** `/ship` creates the feature's worktree, uses a structured
+  interview to pin down scope and the decisions with more than one defensible answer, writes the
+  spec under `.ai/specs/` as the branch's first commit, audits it with four parallel agents, and
+  stops for your OK. You review the plan before any code exists.
+- **Builds the spec one phase at a time.** Once you say go, the delivery loop runs in that same
   worktree and starts a fresh `claude -p` session for the first unticked phase. The session writes
   the failing test first, then the code, runs your repository's gates, commits, ticks the phase in
   the spec, and pushes. The loop reads the tick back from origin and starts the next session.
@@ -43,7 +43,7 @@ automated, and nothing merges itself.
   conversation that degrades as it grows.
 - **The handover is on the branch.** What one phase learns that the next must know is written into
   the spec's notes and committed with the tick. Nothing lives in anyone's memory, and a run
-  interrupted by a usage limit resumes from the first unticked phase.
+  interrupted by a usage limit resumes the interrupted session in the worktree it left.
 - **Proof, not claims.** The loop never takes a session's word for anything: the tick is read from
   origin, the pushed sha is checked against the sentinel, the gates are re-run on the host, and
   the PR is confirmed to exist before it is recorded.
@@ -74,9 +74,19 @@ sentinel, and the archive step's `OK` is believed only when the ledger line is t
 The loop then runs `LOOP_GATES` itself, opens the PR through a short `/open-pr` session, and
 records the unit's measured size and per-session telemetry on the branch.
 
-**Everything is resumable.** Phase ticks and the ledger tick are commits on the unit's branch.
-Re-running the same command after a pause or an escalation reads the ticks from origin and
-continues; phases already ticked are never rebuilt.
+**Everything is resumable.** Phase ticks and the ledger tick are commits on the unit's branch, so
+phases already ticked are never rebuilt. The phase that was in flight is not rebuilt either: a stop
+keeps the worktree, and the loop records which session it launched before launching it. A re-run
+finds that record, checks that the branch is still where the session left it and that nothing else
+is writing the worktree, and continues the session with `claude --resume`. A transcript that is
+gone falls back to a fresh session told the work in the tree is its predecessor's. Only the done
+path reclaims a worktree the loop created.
+
+**It builds where it is driven from.** Run from a linked worktree already on the unit's branch,
+which is what `/ship` leaves behind, the loop builds in that tree: no second worktree, no checkout,
+no reclaim. Run from a `main` checkout, it creates `.claude/worktrees/<branch>`. The loop's own
+state, in `.loop/state/` under the main checkout, is keyed by branch, and so is its lock: two specs
+build side by side from two shells.
 
 ## Requirements
 
@@ -133,10 +143,10 @@ In Claude Code, inside your repository:
 /ship I want <the feature>
 ```
 
-Phase A interviews you, writes `.ai/specs/<date>-<slug>.md`, audits it, and opens the spec's PR.
-Read it and merge it.
+Phase A creates the worktree, interviews you, writes `.ai/specs/<date>-<slug>.md` on the feature's
+branch, audits it, and stops. Read the spec and say OK.
 
-Then run `/ship` again, or drive the loop directly:
+Then run `/ship` again, or drive the loop directly from that worktree:
 
 ```sh
 .loop/delivery-loop.sh .ai/specs/<file>.md --dry-run   # the plan: unit, branch, phases, gates
@@ -201,16 +211,17 @@ All settings live in `.loop/loop.env`. A value exported in the shell overrides t
 
 | Exit | Meaning | What to do |
 |---|---|---|
-| 0 | the unit is done and its PR is open, or nothing was owed | review the PR |
+| 0 | the unit is done and its PR is open, or nothing was owed; a worktree the loop created is reclaimed | review the PR |
 | 2 | wrong usage | read the usage line |
-| 3 | pre-flight refused, or another loop holds the lock | fix the tree or the tools, re-run |
-| 4 | an escalation: the unit is stopped and something is wrong | read `.loop/state/<branch>.json` |
-| 5 | paused: the account's usage limit is reached | re-run once it resets |
+| 3 | pre-flight refused, or another loop holds this unit's lock | fix the tree or the tools, re-run |
+| 4 | an escalation: the unit is stopped and something is wrong; the worktree is kept | read `.loop/state/<branch>.json` and the worktree |
+| 5 | paused: the account's usage limit is reached; the worktree is kept | re-run once it resets |
 
-**Pre-flight refuses** a dirty driver tree, a tree behind `origin/main`, a ledger with two
-unticked units, a spec with no phase checklist, a missing tool, and under the sandbox an
-unreachable Docker daemon. It refuses rather than guessing, because a run driven from a wrong tree
-builds the wrong thing for hours.
+**Pre-flight refuses** a dirty driver tree (unless the dirt is a paused in-place session's own, which
+its record proves), a tree behind its upstream (`origin/main` from a main checkout, the branch's
+own from its worktree), a branch name with a `/`, a ledger with two unticked units, a spec with no
+phase checklist, a missing tool, and under the sandbox an unreachable Docker daemon. It refuses
+rather than guessing, because a run driven from a wrong tree builds the wrong thing for hours.
 
 **An escalation** is a finished session whose result the loop cannot trust: no sentinel, an
 `ESCALATE:<reason>` from the session, a permission denial, an API error, a `CONTINUE` whose phase
@@ -218,9 +229,16 @@ is not ticked on origin, an `OK` with a phase still unticked, a checklist that s
 `MAX_SESSIONS` reached, or a red gate on the host. The loop never retries an escalation. The last
 session's whole result is in `.loop/state/<branch>.json`.
 
-**A pause** is not a failure. Re-running the same command continues from the first unticked
-phase. The phase that was running when the limit hit is rebuilt from its start, because only
-committed work survives.
+**A pause** is not a failure. Re-running the same command continues the session the limit
+refused, in the worktree it left, with its uncommitted work intact. `--dry-run` prints what a
+re-run would resume as a `resume:` line and changes nothing. The re-run stops instead, with an
+escalation, when the branch moved on origin under the interrupted session, when the branch is gone,
+or when an earlier loop or its container is still running: those are a human's call.
+
+**A stop keeps the worktree.** Exit 4 and exit 5 both leave the unit's worktree and, when the
+session wrote no sentinel, the record naming its phase. Drop a worktree the loop created with
+`.loop/reclaim-worktree.sh <path>`; the run names the path on its way out. A worktree the loop was
+driven from is yours and is never offered for reclaim.
 
 ## What a run records
 

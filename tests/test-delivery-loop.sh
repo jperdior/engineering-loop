@@ -29,6 +29,7 @@ fail() { printf 'FAIL %-56s %s\n' "$CASE" "$*" >&2; failures=$((failures + 1)); 
 pass() { printf 'ok   %s\n' "$CASE"; }
 
 SPEC_REL=".ai/specs/fixture.md"
+SPEC2_REL=".ai/specs/fixture-two.md"
 
 # One unit with three phases: the shape every spec has.
 write_spec() {
@@ -39,6 +40,28 @@ write_spec() {
 ## Delivery
 
 - [ ] **PR 1** — `feat-one` — the whole thing — est ~100
+
+## Progress
+
+- [ ] **Phase 1** — the port
+- [ ] **Phase 2** — the adapter
+- [ ] **Phase 3** — the wiring
+
+_Notes:_ not started.
+SPEC
+}
+
+# A second spec, because the lock is per unit. Two loops in one repository are only observable with
+# two units to build. Committed and pushed by the case that wants it, not by `fresh`: every other
+# case would otherwise carry a second unit it never builds.
+write_spec2() {
+  mkdir -p "$1/.ai/specs"
+  cat > "$1/$SPEC2_REL" <<'SPEC'
+# Fixture spec, the second unit
+
+## Delivery
+
+- [ ] **PR 1** — `feat-two` — the whole thing — est ~100
 
 ## Progress
 
@@ -91,6 +114,9 @@ fresh() {
   mkdir -p "$LOOP_TEST_DIR"
   : > "$LOOP_TEST_DIR/prs.txt"
   : > "$LOOP_TEST_DIR/models.txt"
+  : > "$LOOP_TEST_DIR/session-ids.txt"
+  : > "$LOOP_TEST_DIR/resumes.txt"
+  : > "$LOOP_TEST_DIR/record-ids.txt"
 }
 
 run_loop() {
@@ -100,10 +126,63 @@ run_loop() {
        .loop/delivery-loop.sh "$SPEC_REL" "$@" ) >"$TMP/out" 2>"$TMP/err"
 }
 
-ticks()       { git -C "$REPO" show "$2:$SPEC_REL" 2>/dev/null | grep -c "^- \[x\] \*\*$1\*\*" || true; }
+# Sets BG_PID rather than printing it: `pid=$(run_loop_bg …)` would background the loop inside a
+# command-substitution subshell, and a process that is not this shell's child cannot be `wait`ed.
+# Each run gets its own out/err, because two loops sharing $TMP/out would assert on each other.
+run_loop_bg() {
+  spec="$1"; tag="$2"; shift 2
+  ( cd "$REPO" \
+    && PATH="$STUBS:$PATH" \
+       UNIT_TIMEOUT="${UNIT_TIMEOUT:-60}" \
+       .loop/delivery-loop.sh "$spec" "$@" ) >"$TMP/out.$tag" 2>"$TMP/err.$tag" &
+  BG_PID=$!
+}
+
+# The fixture of the in-place flow: a main checkout plus a linked worktree already on the unit's
+# branch, with the spec committed THERE and not on main. That is what /ship leaves behind, and it is
+# the state the loop has to recognise as "this tree is the unit". Sets WT beside REPO.
+fresh_worktree() {
+  fresh "$1"
+  git -C "$REPO" rm -q "$SPEC_REL"
+  git -C "$REPO" commit -qm "the spec rides on the unit's branch, not on main"
+  git -C "$REPO" push -q origin main
+  WT="$REPO/.claude/worktrees/feat-one"
+  git -C "$REPO" worktree add -q -b feat-one "$WT" main
+  write_spec "$WT"
+  git -C "$WT" add -A
+  git -C "$WT" commit -qm "spec: the unit to build"
+}
+
+# The loop invoked from the worktree rather than from the driver checkout. The script's ROOT comes
+# from its own path, so running the worktree's copy is what makes the worktree the driver.
+run_loop_wt() {
+  ( cd "$WT" \
+    && PATH="$STUBS:$PATH" \
+       UNIT_TIMEOUT="${UNIT_TIMEOUT:-60}" \
+       .loop/delivery-loop.sh "$SPEC_REL" "$@" ) >"$TMP/out" 2>"$TMP/err"
+}
+
+# Polls rather than sleeps: a fixed sleep long enough for a loaded runner is dead time on every
+# other run, and one short enough is a flake.
+await_dir() {
+  i=0
+  while [ ! -d "$1" ] && [ "$i" -lt 200 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+ticks()       { git -C "$REPO" show "$2:${3:-$SPEC_REL}" 2>/dev/null | grep -c "^- \[x\] \*\*$1\*\*" || true; }
 phase_ticks() { git -C "$REPO" show "$1:$SPEC_REL" 2>/dev/null | grep -c '^- \[x\] \*\*Phase ' || true; }
 sessions()    { git -C "$REPO" show "$1:sessions-$1.txt" 2>/dev/null | wc -l | tr -d ' '; }
+closing_of()  { git -C "$REPO" show "$1:closing-$1.txt" 2>/dev/null | tr '\n' ';'; }
 remote_has()  { git -C "$TMP/$(basename "$REPO").git" rev-parse --verify --quiet "refs/heads/$1" >/dev/null 2>&1; }
+remote_tip()  { git -C "$TMP/$(basename "$REPO").git" rev-parse "refs/heads/$1" 2>/dev/null || true; }
+statedir()    { printf '%s/.loop/state' "$REPO"; }
+lockdir()     { printf '%s/lock' "$(statedir)"; }
+record()      { printf '%s/units/%s/session' "$(statedir)" "$1"; }
+rec_field()   { sed -n "s/^$1=//p" "$(record "${2:-feat-one}")" 2>/dev/null || true; }
+resumed()     { cat "$LOOP_TEST_DIR/resumes.txt" 2>/dev/null || true; }
 
 # --------------------------------------------------------------------------- the plan
 
@@ -140,7 +219,7 @@ CASE="the unit is built, ticked once and reclaimed"
 fresh happy
 if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ] && remote_has feat-one \
    && [ ! -d "$REPO/.claude/worktrees/feat-one" ] \
-   && [ ! -d "$REPO/.loop/state/lock" ]; then pass; else fail "$(tail -3 "$TMP/err")"; fi
+   && [ ! -d "$(lockdir)/feat-one" ]; then pass; else fail "$(tail -3 "$TMP/err")"; fi
 
 # ONE PHASE PER SESSION. A session cannot observe its own context, so the loop bounds it by giving
 # it exactly one phase and starting a fresh process for the next. The closing work is split the same
@@ -523,13 +602,322 @@ set -e
 if [ "$rc" = 3 ] && ! remote_has feat-one && grep -q "does not parse" "$TMP/err"; then pass
 else fail "exit $rc"; fi
 
+# --------------------------------------------------------------------------- the unit directory
+
+# The stub writes the sentinel to the path the PROMPT names; the loop reads the path IT chose. A run
+# that converges at all is therefore the proof that both name units/<branch>/status -- half a move
+# escalates on "no sentinel was written". The absent old path is what pins which half moved.
+CASE="the sentinel is read from the unit directory"
+fresh unitdir
+if run_loop \
+   && [ -f "$(statedir)/units/feat-one/status" ] \
+   && [ -d "$(statedir)/units/feat-one/claude-config" ] \
+   && [ ! -f "$(statedir)/feat-one.status" ]; then pass
+else fail "$(tail -3 "$TMP/err")"; fi
+
+# `units/<branch>` is one path segment, and so is the unit's worktree directory. A branch with a `/`
+# in it would put the unit's state a level down from where everything else looks for it.
+CASE="a branch name containing / is refused"
+fresh slashbranch
+sed 's|feat-one|feat/one|' "$REPO/$SPEC_REL" > "$REPO/$SPEC_REL.tmp" && mv "$REPO/$SPEC_REL.tmp" "$REPO/$SPEC_REL"
+git -C "$REPO" add -A && git -C "$REPO" commit -qm "a branch name with a slash in it"
+set +e
+run_loop; rc=$?
+set -e
+if [ "$rc" = 3 ] && grep -q "may not contain" "$TMP/err" \
+   && ! remote_has "feat/one" && [ ! -d "$(statedir)/units/feat" ]; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+# --------------------------------------------------------------------------- what a stop keeps
+
+# A pause is not an ending. The refused session left its half-built phase in the worktree, and the
+# next invocation resumes into it -- so a run that stops for the usage limit must keep both the
+# worktree and the record of what was being built in it.
+CASE="a paused run leaves the worktree and a record naming the phase"
+fresh paused
+rec="$(record feat-one)"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+if [ "$rc" = 5 ] && [ -d "$REPO/.claude/worktrees/feat-one" ] && [ -f "$rec" ] \
+   && grep -q '^phase=Phase 2$' "$rec" \
+   && grep -qE '^session_id=[0-9a-f-]+$' "$rec" \
+   && [ -n "$(remote_tip feat-one)" ] \
+   && grep -q "^origin_tip=$(remote_tip feat-one)$" "$rec" \
+   && grep -q "^host_pid=[0-9]" "$rec" \
+   && grep -q "worktree kept at" "$TMP/out"; then pass
+else fail "exit $rc, record: $(tr '\n' ' ' < "$rec" 2>/dev/null): $(tail -2 "$TMP/err")"; fi
+
+# A session that stopped to ask a question wrote no sentinel, and whatever it had done is only in
+# the worktree. The answer to the question is worthless if the work was thrown away on the way out.
+CASE="an escalated run with no sentinel leaves them"
+fresh escleaves
+rec="$(record feat-one)"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=silent; run_loop ); rc=$?
+set -e
+if [ "$rc" = 4 ] && [ -d "$REPO/.claude/worktrees/feat-one" ] \
+   && grep -q '^phase=Phase 1$' "$rec"; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+# The case this design exists for. SIGKILL leaves no sentinel and no JSON: the exit code and the
+# worktree are the whole trace, so the record is the only thing that can name the phase in flight.
+CASE="a killed session leaves them"
+fresh killedsess
+rec="$(record feat-one)"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=killed; run_loop ); rc=$?
+set -e
+if [ "$rc" = 4 ] && [ -d "$REPO/.claude/worktrees/feat-one" ] \
+   && grep -q '^phase=Phase 1$' "$rec"; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+# A session that WROTE a sentinel reported on itself, so there is nothing to resume.
+CASE="a sentinel-bearing escalation drops the record"
+fresh escdrop
+rec="$(record feat-one)"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=escalate; run_loop ); rc=$?
+set -e
+if [ "$rc" = 4 ] && [ -d "$REPO/.claude/worktrees/feat-one" ] && [ ! -f "$rec" ]; then pass
+else fail "exit $rc, record: $(tr '\n' ' ' < "$rec" 2>/dev/null): $(tail -2 "$TMP/err")"; fi
+
+CASE="the done path reclaims the worktree and leaves no record"
+fresh donepath
+rec="$(record feat-one)"
+if run_loop && [ ! -d "$REPO/.claude/worktrees/feat-one" ] && [ ! -f "$rec" ]; then pass
+else fail "$(tail -3 "$TMP/err")"; fi
+
+# The host mints the id and hands it to the session; the session never invents one. Six build
+# sessions and the PR session: seven ids, all distinct.
+CASE="every session is launched with an id of its own"
+fresh sessionids
+if run_loop && [ "$(wc -l < "$LOOP_TEST_DIR/session-ids.txt" | tr -d ' ')" = 7 ] \
+   && [ "$(sort -u "$LOOP_TEST_DIR/session-ids.txt" | wc -l | tr -d ' ')" = 7 ]; then pass
+else fail "ids: $(tr '\n' ' ' < "$LOOP_TEST_DIR/session-ids.txt")"; fi
+
+# ------------------------------------------------------------------- what the next run picks up
+
+# The phase is not rebuilt, the session is continued. A session commits once, at the END of its
+# phase, so a refusal at minute 25 of a 28-minute phase has committed nothing: all of it is
+# uncommitted in the worktree. A fresh session on top of that finds half its own work as a
+# stranger's and pays for the whole phase again.
+CASE="a re-run after a pause resumes the recorded id and the phase is not rebuilt"
+fresh resumepause
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+paused_id="$(rec_field session_id)"
+if [ "$rc" = 5 ] && [ -n "$paused_id" ] && run_loop \
+   && [ "$(resumed)" = "$paused_id" ] \
+   && [ "$(sessions feat-one)" = 6 ] && [ "$(phase_ticks feat-one)" = 3 ] \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "exit $rc, resumed '$(resumed)' want '$paused_id': $(tail -2 "$TMP/err")"; fi
+
+CASE="a re-run after a sentinel-less escalation resumes"
+fresh resumesilent
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=silent; run_loop ); rc=$?
+set -e
+kept_id="$(rec_field session_id)"
+kept_tip="$(rec_field origin_tip)"
+if [ "$rc" = 4 ] && [ -n "$kept_id" ] && run_loop && [ "$(resumed)" = "$kept_id" ] \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "exit $rc, resumed '$(resumed)' want '$kept_id': $(tail -2 "$TMP/err")"; fi
+
+# Reads the run above. That session was interrupted before its first push, so the branch was not on
+# origin at all and the recorded tip is empty -- and a decision that asked origin about it anyway
+# would answer "the branch is gone" and escalate the very first phase.
+CASE="an empty recorded tip skips both remote checks"
+if [ -z "$kept_tip" ] && ! grep -q "gone from origin" "$TMP/err" \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "recorded tip '$kept_tip': $(tail -2 "$TMP/err")"; fi
+
+# An origin that could not be read is not a branch that was never pushed. This pins the read side
+# only, and the tip is injected by hand: `git` is the one binary these suites do not stub.
+CASE="a tip the launching run could not read escalates rather than resuming"
+fresh tipunknown
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+rec="$(record feat-one)"
+[ -f "$rec" ] && sed -e 's/^origin_tip=.*/origin_tip=unknown/' "$rec" > "$rec.tmp" && mv "$rec.tmp" "$rec"
+set +e
+run_loop; rc2=$?
+set -e
+if [ "$rc" = 5 ] && [ "$rc2" = 4 ] && grep -q "could not read origin" "$TMP/err" \
+   && [ -z "$(resumed)" ] && [ -d "$REPO/.claude/worktrees/feat-one" ]; then pass
+else fail "exit $rc2, resumed '$(resumed)': $(tail -2 "$TMP/err")"; fi
+
+# A closing step is resumable by the same mechanism. The fourth launch is the docs step.
+CASE="an interrupted closing step is resumed"
+fresh resumeclose
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota LOOP_TEST_QUOTA_AT=3; run_loop ); rc=$?
+set -e
+closing_id="$(rec_field session_id)"
+if [ "$rc" = 5 ] && [ "$(rec_field phase)" = closing:docs ] && run_loop \
+   && [ "$(resumed)" = "$closing_id" ] && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "exit $rc, phase '$(rec_field phase)', resumed '$(resumed)': $(tail -2 "$TMP/err")"; fi
+
+# Resuming the review must not redo the docs. A run that forgot which closing steps preceded the
+# interrupted one would sync the docs a second time, and the review a second time after that.
+CASE="resuming a later closing step does not repeat the earlier ones"
+fresh resumereview
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota LOOP_TEST_QUOTA_AT=4; run_loop ); rc=$?
+set -e
+review_id="$(rec_field session_id)"
+if [ "$rc" = 5 ] && [ "$(rec_field phase)" = closing:review ] && run_loop \
+   && [ "$(resumed)" = "$review_id" ] \
+   && [ "$(closing_of feat-one)" = "closing step docs;closing step review;" ] \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "exit $rc, phase '$(rec_field phase)', closing '$(closing_of feat-one)': $(tail -2 "$TMP/err")"; fi
+
+# A session can push its tick and die before the loop hears it. Its conversation is over -- the work
+# is on origin -- so the record describes nothing and resuming it would redo a finished phase.
+CASE="a record whose phase is ticked is dropped and the run proceeds"
+fresh recticked
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+rec="$(record feat-one)"
+sed 's/^phase=.*/phase=Phase 1/' "$rec" > "$rec.tmp" && mv "$rec.tmp" "$rec"
+if [ "$rc" = 5 ] && run_loop && [ -z "$(resumed)" ] \
+   && grep -q "is ticked on origin" "$TMP/out" && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "exit $rc, resumed '$(resumed)': $(tail -2 "$TMP/err")"; fi
+
+# Someone else advanced the branch while the unit sat paused. A human decides that, and decides it
+# before a session is paid for.
+CASE="a branch whose tip is not a descendant of the recorded one escalates without a session"
+fresh moved
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+launched="$(wc -l < "$LOOP_TEST_DIR/models.txt" | tr -d ' ')"
+git -C "$REPO" push -q -f origin "main:refs/heads/feat-one"
+set +e
+run_loop; rc2=$?
+set -e
+if [ "$rc" = 5 ] && [ "$rc2" = 4 ] && grep -q "moved under an interrupted session" "$TMP/err" \
+   && [ "$(wc -l < "$LOOP_TEST_DIR/models.txt" | tr -d ' ')" = "$launched" ]; then pass
+else fail "exit $rc2: $(tail -2 "$TMP/err")"; fi
+
+CASE="a branch gone from origin escalates"
+fresh branchgone
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+git -C "$TMP/branchgone.git" update-ref -d refs/heads/feat-one
+set +e
+run_loop; rc2=$?
+set -e
+if [ "$rc" = 5 ] && [ "$rc2" = 4 ] && grep -q "gone from origin" "$TMP/err" \
+   && [ -d "$REPO/.claude/worktrees/feat-one" ]; then pass
+else fail "exit $rc2: $(tail -2 "$TMP/err")"; fi
+
+# A resume into a worktree that still has a writer is worse than rebuilding the phase. The holder is
+# a pid whose command line is the recorded snapshot -- `sleep` alone is a recycled PID.
+CASE="a record for a live holder escalates"
+fresh liveholder
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+printf '#!/bin/sh\nsleep 120\n' > "$TMP/delivery-loop.sh"
+chmod +x "$TMP/delivery-loop.sh"
+"$TMP/delivery-loop.sh" & holder=$!
+rec="$(record feat-one)"
+sed -e "s/^host_pid=.*/host_pid=$holder/" -e "s|^snapshot=.*|snapshot=$TMP/delivery-loop.sh|" \
+  "$rec" > "$rec.tmp" && mv "$rec.tmp" "$rec"
+set +e
+run_loop; rc2=$?
+set -e
+kill "$holder" 2>/dev/null || true
+if [ "$rc" = 5 ] && [ "$rc2" = 4 ] && grep -q "is still running" "$TMP/err" && [ -f "$rec" ]; then pass
+else fail "exit $rc2, record: $([ -f "$rec" ] && echo kept || echo dropped): $(tail -2 "$TMP/err")"; fi
+
+# The transcript the resume names can be gone: pruned, wiped, or never persisted by a container. The
+# work is still in the worktree, uncommitted, so the answer is a fresh session told exactly that.
+CASE="an unresumable transcript falls back to a fresh session in the kept worktree"
+fresh noresume
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+paused_id="$(rec_field session_id)"
+ids="$LOOP_TEST_DIR/session-ids.txt"
+recids="$LOOP_TEST_DIR/record-ids.txt"
+before="$(wc -l < "$ids" | tr -d ' ')"
+# Dropped into the kept worktree, uncommitted, the way an interrupted session's half-built phase
+# sits there. This file reaching the branch is the proof that the fallback ran in that tree.
+echo carried > "$REPO/.claude/worktrees/feat-one/carried-over.txt"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=noresume; run_loop ); rc2=$?
+set -e
+fallback_id="$(sed -n "$((before + 1))p" "$ids")"
+if [ "$rc" = 5 ] && [ "$rc2" = 0 ] && [ "$(resumed)" = "$paused_id" ] \
+   && [ -n "$fallback_id" ] && [ "$fallback_id" != "$paused_id" ] \
+   && grep -q "could not be resumed" "$TMP/err" \
+   && git -C "$REPO" show feat-one:carried-over.txt >/dev/null 2>&1 \
+   && [ "$(sessions feat-one)" = 6 ] && [ "$(phase_ticks feat-one)" = 3 ] \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "exit $rc2, fallback id '$fallback_id' vs paused '$paused_id': $(tail -2 "$TMP/err")"; fi
+
+# A second interruption has to reach the fallback, not the conversation it replaced.
+CASE="the fallback rewrites the record with the id it minted"
+if [ -n "$fallback_id" ] && [ "$(sed -n 3p "$recids")" = "$paused_id" ] \
+   && [ "$(sed -n 4p "$recids")" = "$fallback_id" ]; then pass
+else fail "record named '$(sed -n 3p "$recids")' then '$(sed -n 4p "$recids")'"; fi
+
+# A dry run inspecting a paused unit must not destroy the resume it is inspecting.
+CASE="--dry-run prints the resume decision and changes nothing"
+fresh dryresume
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+paused_id="$(rec_field session_id)"
+rec="$(record feat-one)"
+set +e
+run_loop --dry-run; rc2=$?
+set -e
+if [ "$rc" = 5 ] && [ "$rc2" = 0 ] \
+   && grep -q "resume: Phase 2 from session $paused_id" "$TMP/out" \
+   && [ -f "$rec" ] && [ ! -d "$(lockdir)/feat-one" ] \
+   && [ -d "$REPO/.claude/worktrees/feat-one" ] && [ -z "$(resumed)" ]; then pass
+else fail "exit $rc2, record $([ -f "$rec" ] && echo kept || echo dropped): $(tail -3 "$TMP/out")"; fi
+
+# Reads the run above. The same state the run path escalates on is a line of report here.
+CASE="--dry-run reports an escalating resume without escalating"
+git -C "$REPO" push -q -f origin "main:refs/heads/feat-one"
+set +e
+run_loop --dry-run; rc3=$?
+set -e
+if [ "$rc3" = 0 ] && grep -q "resume: none (feat-one moved under an interrupted session" "$TMP/out" \
+   && ! grep -q ESCALATE "$TMP/err" && [ -f "$rec" ]; then pass
+else fail "exit $rc3: $(tail -3 "$TMP/out") / $(tail -2 "$TMP/err")"; fi
+
 # --------------------------------------------------------------------------- the lock
 
 CASE="a live loop's lock is respected"
 fresh lock1
-mkdir -p "$REPO/.loop/state/lock"
+mkdir -p "$(lockdir)/feat-one"
 sleep 120 & sleeper=$!
-echo "$sleeper" > "$REPO/.loop/state/lock/pid"
+echo "$sleeper" > "$(lockdir)/feat-one/pid"
 set +e
 run_loop --dry-run >/dev/null 2>&1   # dry-run takes no lock
 ( cd "$REPO" && PATH="$STUBS:$PATH" .loop/delivery-loop.sh "$SPEC_REL" ) >"$TMP/out" 2>"$TMP/err"; rc=$?
@@ -540,18 +928,135 @@ if [ "$rc" = 3 ] && grep -q "recycled PID" "$TMP/err"; then pass; else fail "exi
 
 CASE="--force-unlock takes a recycled-PID lock"
 sleep 120 & sleeper=$!
-echo "$sleeper" > "$REPO/.loop/state/lock/pid"
+mkdir -p "$(lockdir)/feat-one"
+echo "$sleeper" > "$(lockdir)/feat-one/pid"
 if run_loop --force-unlock; then pass; else fail "$(tail -3 "$TMP/err")"; fi
 kill "$sleeper" 2>/dev/null || true
 
-CASE="a dead holder's lock is reclaimed"
+# The holder runs from a snapshot, and the snapshot is not named `.sh`: `mktemp -t
+# delivery-loop.XXXXXX` yields `delivery-loop.aB3xYz`, so a liveness check that greps the holder's
+# command line for `delivery-loop.sh` reads a LIVE loop as stale and hands its lock to the next run.
+CASE="a live holder whose command line is the snapshot path is respected"
+fresh locksnap
+snap="$TMP/delivery-loop.aB3xYz"
+printf '#!/bin/sh\nsleep 120\n' > "$snap"
+chmod +x "$snap"
+"$snap" & holder=$!
+mkdir -p "$(lockdir)/feat-one"
+echo "$holder" > "$(lockdir)/feat-one/pid"
+echo "$snap"   > "$(lockdir)/feat-one/snapshot"
+set +e
+run_loop; rc=$?
+set -e
+kill "$holder" 2>/dev/null || true
+if [ "$rc" = 3 ] && grep -q "another delivery loop is running" "$TMP/err"; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+CASE="a dead holder's lock is reclaimed, and only its own branch's"
 fresh lock2
-mkdir -p "$REPO/.loop/state/lock"
-echo "999999" > "$REPO/.loop/state/lock/pid"
-if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass; else fail "$(tail -3 "$TMP/err")"; fi
+mkdir -p "$(lockdir)/feat-one" "$(lockdir)/feat-two"
+echo "999999" > "$(lockdir)/feat-one/pid"
+echo "999998" > "$(lockdir)/feat-two/pid"
+if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ] && [ -f "$(lockdir)/feat-two/pid" ]; then pass
+else fail "$(tail -3 "$TMP/err")"; fi
 
 CASE="the lock is released on the way out"
-if [ ! -d "$REPO/.loop/state/lock" ]; then pass; else fail "lock left behind"; fi
+if [ ! -d "$(lockdir)/feat-one" ]; then pass; else fail "lock left behind"; fi
+
+CASE="--force-unlock takes one branch's lock and not another's"
+fresh lockforce
+sleep 120 & sleeper=$!
+mkdir -p "$(lockdir)/feat-one" "$(lockdir)/feat-two"
+echo "$sleeper" > "$(lockdir)/feat-one/pid"
+echo "$sleeper" > "$(lockdir)/feat-two/pid"
+if run_loop --force-unlock && [ ! -d "$(lockdir)/feat-one" ] \
+   && [ "$(cat "$(lockdir)/feat-two/pid")" = "$sleeper" ]; then pass
+else fail "$(tail -3 "$TMP/err")"; fi
+kill "$sleeper" 2>/dev/null || true
+
+# --force-unlock is the hammer, and this is the one thing it must not reach: the unit's own record
+# says a SESSION is running, holding the worktree a resume would reuse.
+CASE="--force-unlock refuses while the unit's own session is live"
+fresh lockforcelive
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+printf '#!/bin/sh\nsleep 120\n' > "$TMP/delivery-loop.sh"
+chmod +x "$TMP/delivery-loop.sh"
+"$TMP/delivery-loop.sh" & holder=$!
+rec="$(record feat-one)"
+sed -e "s/^host_pid=.*/host_pid=$holder/" -e "s|^snapshot=.*|snapshot=$TMP/delivery-loop.sh|" \
+  "$rec" > "$rec.tmp" && mv "$rec.tmp" "$rec"
+set +e
+run_loop --force-unlock; rc2=$?
+set -e
+kill "$holder" 2>/dev/null || true
+if [ "$rc" = 5 ] && [ "$rc2" = 3 ] && grep -q "is still running" "$TMP/err" && [ -f "$rec" ]; then pass
+else fail "exit $rc2: $(tail -2 "$TMP/err")"; fi
+
+# One loop per unit, several per repository. Two specs, two branches, two worktrees, two unit
+# directories: nothing a run writes is shared.
+CASE="two loops on two units run at the same time and both exit 0"
+fresh twoloops
+write_spec2 "$REPO"
+git -C "$REPO" add -A
+git -C "$REPO" commit -qm "a second unit"
+git -C "$REPO" push -q origin main
+LOOP_TEST_CLAUDE=slow LOOP_TEST_SLEEP=1 run_loop_bg "$SPEC_REL" one;  one=$BG_PID
+LOOP_TEST_CLAUDE=slow LOOP_TEST_SLEEP=1 run_loop_bg "$SPEC2_REL" two; two=$BG_PID
+set +e
+wait "$one"; rc=$?
+wait "$two"; rc2=$?
+set -e
+# Two exit codes alone would be satisfied by a repository-wide lock the second loop RECLAIMED off
+# the first. The reclaim warning is what separates "they never contended" from "one took the
+# other's lock and neither noticed".
+if [ "$rc" = 0 ] && [ "$rc2" = 0 ] \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ] && [ "$(ticks 'PR 1' feat-two "$SPEC2_REL")" = 1 ] \
+   && ! grep -q "reclaiming a stale lock" "$TMP/err.one" "$TMP/err.two"; then pass
+else fail "exit $rc / $rc2: $(tail -2 "$TMP/err.one") / $(tail -2 "$TMP/err.two")"; fi
+
+CASE="a second loop on the same unit is refused while the first runs"
+fresh lockbusy
+LOOP_TEST_CLAUDE=slow LOOP_TEST_SLEEP=2 run_loop_bg "$SPEC_REL" first; first=$BG_PID
+set +e
+await_dir "$(lockdir)/feat-one"
+run_loop; rc=$?
+wait "$first"; rc2=$?
+set -e
+if [ "$rc" = 3 ] && [ "$rc2" = 0 ] && grep -q "another delivery loop is running" "$TMP/err"; then pass
+else fail "exit $rc / $rc2: $(tail -2 "$TMP/err")"; fi
+
+# The lock a loop from before this change holds is `lock/` itself, with a `lock/pid` inside it. It
+# is repository-wide, and it is respected as such.
+CASE="a pre-change repository-wide lock with a live pid is refused"
+fresh locklegacylive
+printf '#!/bin/sh\nsleep 120\n' > "$TMP/delivery-loop.sh"
+chmod +x "$TMP/delivery-loop.sh"
+"$TMP/delivery-loop.sh" & holder=$!
+mkdir -p "$(lockdir)"
+echo "$holder" > "$(lockdir)/pid"
+set +e
+run_loop; rc=$?
+set -e
+kill "$holder" 2>/dev/null || true
+if [ "$rc" = 3 ] && grep -q "another delivery loop is running" "$TMP/err"; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+CASE="a pre-change repository-wide lock with a dead pid is swept"
+fresh locklegacydead
+mkdir -p "$(lockdir)"
+echo "999999" > "$(lockdir)/pid"
+if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ] && [ ! -f "$(lockdir)/pid" ]; then pass
+else fail "$(tail -3 "$TMP/err")"; fi
+
+# The parent is never rmdir'd -- an rmdir would race a sibling loop's mkdir -p -- so every run after
+# the first meets one. It carries no pid and no branch, and it means nothing at all.
+CASE="an empty lock/ parent left by an earlier run blocks nothing"
+fresh lockparent
+mkdir -p "$(lockdir)"
+if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass; else fail "$(tail -3 "$TMP/err")"; fi
 
 # --------------------------------------------------------------------------- arguments
 
@@ -709,11 +1214,12 @@ if grep -q 'group-add "$LOOP_SOCK_GID"' loop/delivery-loop.sh; then pass
 else fail "sessions do not receive the socket gid"; fi
 
 # A linked worktree is NOT self-contained: its `.git` is a file reading `gitdir: <main repo>/.git/
-# worktrees/<name>`, an absolute path. Without the main repo's .git mounted there is no repository
-# inside the container at all.
+# worktrees/<name>`, an absolute path. Without the common .git mounted there is no repository inside
+# the container at all -- and in place there is no `$ROOT/.git` directory to fall back on, which is
+# why the mount is resolved rather than spelled.
 CASE="the sandbox mounts the main repo gitdir a worktree points at"
 # shellcheck disable=SC2016
-if grep -q -- '-v "$ROOT/.git:$ROOT/.git"' loop/delivery-loop.sh; then pass
+if [ "$(grep -c -- '-v "$GIT_COMMON:$GIT_COMMON"' loop/delivery-loop.sh)" = 2 ]; then pass
 else fail "a sandboxed unit would have no repository"; fi
 
 CASE="a sandboxed unit is probed for a working repo before a session is paid for"
@@ -721,6 +1227,80 @@ CASE="a sandboxed unit is probed for a working repo before a session is paid for
 if grep -q 'sandbox_sees_repo "$wt"' loop/delivery-loop.sh \
    && grep -q 'rev-parse --git-dir' loop/delivery-loop.sh; then pass
 else fail "no pre-session repo probe"; fi
+
+# --------------------------------------------------------------------- the container the loop owns
+
+# `docker run` is the client, not the container. A kill -9 of the driver leaves a container running
+# with the worktree, the common `.git` and GH_TOKEN mounted -- and the next run resumes INTO that
+# worktree. These cases build a whole unit through the sandbox path, which the `docker` stub makes
+# possible by running `stubs/claude` with the container's own arguments in its own workdir.
+CASE="the sandbox mounts the unit's directory and nothing else of the state dir"
+fresh sbmounts
+# Resolved, because the loop mounts `pwd -P` paths and macOS's mktemp answers through a symlink.
+SD="$(cd "$REPO" && pwd -P)/.loop/state"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_SANDBOX=1 CLAUDE_CODE_OAUTH_TOKEN=x GH_TOKEN=x LOOP_TEST_DOCKER=ok; run_loop ); rc=$?
+set -e
+if [ "$rc" = 0 ] && [ "$(ticks 'PR 1' feat-one)" = 1 ] \
+   && grep -qx -- "$SD/units/feat-one:$SD/units/feat-one" "$LOOP_TEST_DIR/mounts.txt" \
+   && grep -qx -- "$SD/units/feat-one/claude-config:/loop-config" "$LOOP_TEST_DIR/mounts.txt" \
+   && ! grep -qx -- "$SD:$SD" "$LOOP_TEST_DIR/mounts.txt"; then pass
+else fail "exit $rc, mounts: $(tr '\n' ' ' < "$LOOP_TEST_DIR/mounts.txt" 2>/dev/null)$(tail -2 "$TMP/err")"; fi
+
+# Reads the run above. `--name` is what a human greps for; `--init` is what reaps the CLI's children
+# when the container is killed; the cid is what the loop itself kills by. Seven containers: six
+# sessions and the PR launch.
+CASE="every session container is named, init'd and writes its id"
+if grep -q '^delivery-loop-feat-one-' "$LOOP_TEST_DIR/names.txt" \
+   && [ "$(sort -u "$LOOP_TEST_DIR/names.txt" | wc -l | tr -d ' ')" = 7 ] \
+   && grep -q -- ' --init ' "$LOOP_TEST_DIR/docker-run.txt" \
+   && grep -q "^$SD/units/feat-one/cid " "$LOOP_TEST_DIR/cids.txt"; then pass
+else fail "names: $(tr '\n' ' ' < "$LOOP_TEST_DIR/names.txt"), cids: $(tr '\n' ' ' < "$LOOP_TEST_DIR/cids.txt")"; fi
+
+CASE="a session that exits 137 leaves a cid the teardown kills and removes"
+fresh sbkilled
+SD="$(cd "$REPO" && pwd -P)/.loop/state"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_SANDBOX=1 CLAUDE_CODE_OAUTH_TOKEN=x GH_TOKEN=x LOOP_TEST_DOCKER=ok LOOP_TEST_CLAUDE=killed
+  run_loop ); rc=$?
+set -e
+if [ "$rc" = 4 ] \
+   && [ "$(awk '{ print $2 }' "$LOOP_TEST_DIR/cids.txt")" = "$(cat "$LOOP_TEST_DIR/kills.txt" 2>/dev/null)" ] \
+   && [ -s "$LOOP_TEST_DIR/kills.txt" ] \
+   && [ ! -f "$SD/units/feat-one/cid" ] \
+   && [ -d "$REPO/.claude/worktrees/feat-one" ]; then pass
+else fail "exit $rc, killed: $(tr '\n' ' ' < "$LOOP_TEST_DIR/kills.txt" 2>/dev/null)$(tail -2 "$TMP/err")"; fi
+
+# `--rm` does not delete the cid file and docker refuses to start when it already exists -- so the
+# launch after a kill would fail before a token is spent.
+CASE="a cid file left behind does not block the next launch"
+fresh sbstalecid
+mkdir -p "$(statedir)/units/feat-one"
+echo "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+  > "$(statedir)/units/feat-one/cid"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_SANDBOX=1 CLAUDE_CODE_OAUTH_TOKEN=x GH_TOKEN=x LOOP_TEST_DOCKER=ok; run_loop ); rc=$?
+set -e
+if [ "$rc" = 0 ] && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "exit $rc: $(tail -3 "$TMP/err")"; fi
+
+# A kept worktree outlives the run that created it. Copying the driver's settings only where the
+# worktree is created pins a resumed unit to whatever permissions were current the night it started.
+CASE="a reused worktree gets the driver's current settings"
+fresh reusesettings
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop )
+mkdir -p "$REPO/.claude"
+echo '{"permissions":{"allow":["Bash(make gate)"]}}' > "$REPO/.claude/settings.local.json"
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=silent; run_loop )
+set -e
+if grep -q 'make gate' "$REPO/.claude/worktrees/feat-one/.claude/settings.local.json" 2>/dev/null; then pass
+else fail "the settings the driver has now never reached the worktree the run reused"; fi
 
 CASE="--dry-run says whether the sandbox is on"
 fresh sandboxoff
@@ -824,6 +1404,136 @@ else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
 CASE="--dry-run says the tree is behind rather than refusing"
 if run_loop --dry-run && grep -q "behind origin/main" "$TMP/err"; then pass
 else fail "a dry run should report it and still print the plan"; fi
+
+# --------------------------------------------------------------------------- building in place
+#
+# One worktree, one branch, one PR. The spec is written in the unit's own worktree and never merged
+# on its own, so by the time the loop runs, the tree it is driven from IS the unit. Building a
+# second worktree of the same branch beside it is not merely wasteful -- git refuses to check the
+# branch out twice, so a loop that cannot build in place escalates instead of building anything.
+
+CASE="driven from a worktree on the unit's branch, the loop builds in place"
+fresh_worktree inplace
+before_wts="$(git -C "$REPO" worktree list | wc -l | tr -d ' ')"
+set +e
+run_loop_wt; rc=$?
+set -e
+if [ "$rc" = 0 ] && [ "$(ticks 'PR 1' feat-one)" = 1 ] && [ "$(phase_ticks feat-one)" = 3 ] \
+   && grep -q "building in place" "$TMP/out" \
+   && [ -d "$WT" ] && [ -f "$WT/sessions-feat-one.txt" ] \
+   && [ ! -d "$WT/.claude/worktrees" ] \
+   && [ "$(git -C "$REPO" worktree list | wc -l | tr -d ' ')" = "$before_wts" ]; then pass
+else fail "exit $rc, ticks $(ticks 'PR 1' feat-one), worktrees $(git -C "$REPO" worktree list | tr '\n' ' '): $(tail -3 "$TMP/err")"; fi
+
+# The driver IS the unit, so the only reclaim there has ever been would now delete the human's own
+# tree. `rc` and the sessions file are re-asserted from the run above, which is what stops this being
+# vacuous: on a script that cannot build in place, the run escalates before the first session, and a
+# case that asked only "does $WT still exist" would be green for a unit that was never built.
+CASE="a finished unit built in place is never reclaimed"
+if [ "$rc" = 0 ] && [ -f "$WT/sessions-feat-one.txt" ] \
+   && [ -d "$WT" ] && [ -f "$WT/.ai/specs/fixture.md" ] \
+   && ! grep -q "worktree kept at" "$TMP/out" \
+   && ! grep -q "reclaim of" "$TMP/err"; then pass
+else fail "the driver worktree did not survive its own run: $(tail -3 "$TMP/out")"; fi
+
+# The pause this whole design exists for, on the path that is the default one. In place the dirty
+# tree is the driver's own, and a dirty-tree refusal that cannot tell the loop's own half-phase from
+# a human's editing makes the resume unreachable. The session record is what tells them apart.
+CASE="a paused in-place unit re-runs into its own uncommitted work"
+fresh_worktree inplacepaused
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop_wt ); rc=$?
+set -e
+paused_id="$(rec_field session_id)"
+echo "half a phase, uncommitted" > "$WT/carried-over.txt"
+set +e
+run_loop_wt; rc2=$?
+set -e
+if [ "$rc" = 5 ] && [ -n "$paused_id" ] && [ "$rc2" = 0 ] \
+   && [ "$(resumed)" = "$paused_id" ] \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ] \
+   && git -C "$REPO" ls-tree -r --name-only feat-one | grep -q '^carried-over\.txt$'; then pass
+else fail "paused $rc, re-run $rc2, resumed '$(resumed)' want '$paused_id': $(tail -3 "$TMP/err")"; fi
+
+# The loop's own settings and its two credentials live in a gitignored file, so a worktree never has
+# one of its own -- and in place the driver IS a worktree.
+CASE="in place, the env file is read from the main checkout"
+fresh_worktree inplaceenv
+printf 'LOOP_MODEL=haiku\n' > "$REPO/.loop/loop.env"
+if run_loop_wt --dry-run && grep -q "build sessions on haiku" "$TMP/out"; then pass
+else fail "the main checkout's env file was not read in place: $(tail -3 "$TMP/out")"; fi
+rm -f "$REPO/.loop/loop.env"
+
+# The loop's state hangs off the main checkout, not the driver: a transcript inside the built tree
+# would be bind-mounted into every gate's container, and two drivers of one unit would take two locks.
+CASE="in place, the unit directory and the lock live under the main checkout"
+fresh_worktree inplacestate
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop_wt ); rc=$?
+set -e
+if [ "$rc" = 5 ] && [ -f "$(record feat-one)" ] && [ ! -d "$WT/.loop/state" ]; then pass
+else fail "exit $rc, record at main: $([ -f "$(record feat-one)" ] && echo yes || echo no), state in worktree: $([ -d "$WT/.loop/state" ] && echo yes || echo no)"; fi
+
+CASE="the dirty-tree refusal still applies in place"
+fresh_worktree inplacedirty
+echo "someone else was editing this" > "$WT/half-finished.txt"
+set +e
+run_loop_wt; rc=$?
+set -e
+if [ "$rc" = 3 ] && grep -q "uncommitted changes" "$TMP/err"; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+# A feature branch is behind main the moment main moves, so the behind-main refusal would refuse
+# every in-place run the day after the branch was cut.
+CASE="a branch behind origin/main but level with its own upstream runs in place"
+fresh_worktree inplacebehind
+git -C "$REPO" commit -q --allow-empty -m "main moved on"
+git -C "$REPO" push -q origin main
+set +e
+run_loop_wt; rc=$?
+set -e
+if [ "$rc" = 0 ] && [ "$(ticks 'PR 1' feat-one)" = 1 ] && ! grep -q "behind origin/main" "$TMP/err"; then pass
+else fail "exit $rc: $(tail -3 "$TMP/err")"; fi
+
+CASE="a worktree behind its own upstream is refused in place"
+fresh_worktree inplacestale
+git -C "$WT" commit -q --allow-empty -m "another run pushed this"
+git -C "$WT" push -q origin feat-one
+git -C "$WT" reset -q --hard HEAD~1
+set +e
+run_loop_wt; rc=$?
+set -e
+if [ "$rc" = 3 ] && grep -q "behind origin/feat-one" "$TMP/err"; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+CASE="driven from main, the unit still gets a worktree of its own"
+fresh frommain
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=quota; run_loop ); rc=$?
+set -e
+if [ "$rc" = 5 ] && [ -d "$REPO/.claude/worktrees/feat-one" ] \
+   && ! grep -q "building in place" "$TMP/out" \
+   && grep -q "worktree kept at .*/\.claude/worktrees/feat-one" "$TMP/out"; then pass
+else fail "exit $rc: $(tail -3 "$TMP/out")"; fi
+
+# A linked worktree's `.git` is a FILE naming an absolute path into the main repository, so a
+# container given only that file has no repository at all -- and in place there is no `$ROOT/.git`
+# directory to mount instead.
+CASE="the common git directory is what the sandbox mounts"
+fresh_worktree inplacesb
+COMMON="$(cd "$REPO/.git" && pwd -P)"
+WTP="$(cd "$WT" && pwd -P)"
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_SANDBOX=1 CLAUDE_CODE_OAUTH_TOKEN=x GH_TOKEN=x LOOP_TEST_DOCKER=ok; run_loop_wt ); rc=$?
+set -e
+if [ "$rc" = 0 ] && [ "$(ticks 'PR 1' feat-one)" = 1 ] \
+   && grep -qx -- "$COMMON:$COMMON" "$LOOP_TEST_DIR/mounts.txt" \
+   && ! grep -q -- "$WTP/.git:" "$LOOP_TEST_DIR/mounts.txt"; then pass
+else fail "exit $rc, mounts: $(tr '\n' ' ' < "$LOOP_TEST_DIR/mounts.txt" 2>/dev/null)$(tail -2 "$TMP/err")"; fi
 
 # A TOOLCHAIN THAT FELL OVER AND A UNIT THAT IS WRONG LOOK IDENTICAL FROM AN EXIT CODE. Re-running
 # the gate costs one `make` and no tokens; escalating falsely costs the rest of an unattended night.

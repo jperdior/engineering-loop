@@ -15,6 +15,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# This suite reclaims the tree it runs from when that tree is a linked worktree. One case passes `.`
+# to assert that a MAIN checkout is refused; from a worktree `.` is a legitimate target and
+# reclaim-worktree.sh does exactly what it is for -- removes the directory and everything uncommitted
+# in it. CI checks out a main checkout, so the job is unaffected.
+if [ "$(cd "$(git rev-parse --git-dir)" && pwd -P)" != "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)" ]; then
+  echo "test-reclaim-worktree: this is a LINKED WORKTREE. One case here passes '.' to" >&2
+  echo "reclaim-worktree.sh, which would remove this tree and everything uncommitted in it." >&2
+  echo "Run the suite from the main checkout." >&2
+  exit 3
+fi
+
 RECLAIM="loop/reclaim-worktree.sh"
 TMP="$(mktemp -d)"
 PROBE="$TMP/wt-probe"

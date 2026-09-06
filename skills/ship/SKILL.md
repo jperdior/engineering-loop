@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Take a feature from a sentence to a merged PR — interview, spec, audit, spec PR, then the unattended loop, which builds one spec phase per fresh session until the feature is built. Two human gates: the spec, and the PR. Triggers on "ship", "build me", "let's build", "I want a feature that", "take this from idea to PRs".
+description: Take a feature from a sentence to a merged PR — interview, spec, audit, the user's OK, then the unattended loop, which builds one spec phase per fresh session in that same worktree until the feature is built. Two human gates: the spec, and the PR. Triggers on "ship", "build me", "let's build", "I want a feature that", "take this from idea to PRs".
 ---
 
 # Ship
@@ -11,44 +11,45 @@ approval gate at exactly two points and everything between automated.
 ```
   you describe it
         ↓
-  A. interview → spec → audit → revise
+  A. worktree → interview → spec → audit → revise
         ↓
-  ▣ GATE 1 — the spec PR. You read it, you merge it.
+  ▣ GATE 1 — the spec. You read it, you say OK. Nothing runs until you do.
         ↓
-  B. the loop: one fresh session per spec phase → three closing sessions
-     (docs, review, archive) → one PR
+  B. the loop, in that same worktree: one fresh session per spec phase →
+     three closing sessions (docs, review, archive) → one PR
         ↓
   ▣ GATE 2 — the PR. You read it, you merge it.
 ```
 
-**One feature, one branch, one PR.** The spec's phases are its commits, and each phase is
-built by its own session. A session cannot observe its own context, so the loop bounds it
-by scope instead: it hands the session exactly one phase, and starts a fresh process for
-the next one.
+**One feature, one worktree, one branch, one PR.** The spec is committed on that branch as
+its first commit and reaches `main` in the same PR as the code it describes. The spec's
+phases are its commits, and each phase is built by its own session. A session cannot
+observe its own context, so the loop bounds it by scope instead: it hands the session
+exactly one phase, and starts a fresh process for the next one.
 
-**The spec ships first, alone, and is merged before any code is built.** The loop creates
-the worktree from `main` and copies in nothing but `settings.local.json`, so a spec that is
-not on `main` is not in the worktree, and the session is told to implement a file that
-does not exist.
+**Gate 1 is a sentence, not a merge.** The user reads the spec in the worktree and says to
+go ahead; nothing is built before they do. There is no spec-only PR and no `-spec` branch —
+the PR's own history shows what was approved and when, because the spec's commits precede
+the code's on the branch.
 
 ## Which phase am I in?
 
-Do not ask. Derive it:
+Do not ask. Derive it, from inside the feature's worktree:
 
 ```sh
-git fetch origin --quiet
-git cat-file -e "origin/main:.ai/specs/{file}.md" 2>/dev/null && echo BUILD || echo SPEC
+git branch --show-current                     # feat-<slug>, or main if there is no worktree yet
+.loop/parse-ledger.sh .ai/specs/{file}.md --phases 2>/dev/null
 ```
 
-- The spec is **not** on `origin/main` → **Phase A**.
-- The spec **is** on `origin/main` → **Phase B**. Report what remains and carry
-  on; do not re-spec.
+- No worktree, or no spec on this branch → **Phase A**.
+- The spec is on this branch and the user has approved it → **Phase B**. Report what
+  remains and carry on; do not re-spec.
 
 If the user gave no spec path, search `.ai/specs/*.md` for one matching their
 description before assuming Phase A. Resuming a half-finished feature is the
 common case, not the exception.
 
-## Phase A — from a sentence to a merged spec
+## Phase A — from a sentence to an approved spec
 
 1. **Interview.** Invoke `superpowers:brainstorming`. This is the one place the
    user's attention is worth most, so spend it here: scope, the decisions with
@@ -61,33 +62,40 @@ common case, not the exception.
    force a second (a migration that must land and settle before its reader; a
    contract another team is waiting on) — that is a fact you establish from the
    work, state in the ledger, and mention in your Phase A report. It is not a menu.
-2. **Worktree.** `/new-feature feat-<slug>-spec`. The `-spec` suffix keeps this
-   branch distinguishable from the branch the loop builds on.
+2. **Worktree.** `/new-feature feat-<slug>`. This is the branch the loop builds
+   on and the tree it builds in — no suffix, and no second worktree later.
 3. **Draft.** `/spec-writing`. Two things the loop reads: the `## Delivery`
-   ledger — **one unit**, whose backticked branch is the branch the loop builds
-   on — and the phase checklist under `## Progress`, which is what the loop
-   hands to each session and checks when it exits. The phases are the sessions:
-   cut each one to what a single fresh session can read and build.
+   ledger — **one unit**, whose backticked branch must be **this** branch — and
+   the phase checklist under `## Progress`, which is what the loop hands to each
+   session and checks when it exits. The phases are the sessions: cut each one to
+   what a single fresh session can read and build.
 4. **Audit.** `/pre-implement-spec .ai/specs/{file}.md`. Four parallel agents.
 5. **Revise until the verdict is "ready".** Fix what it found; re-run it if the
-   findings were structural. Do not carry Critical or High findings into a PR.
-6. **Open the spec PR.** `/open-pr`. It applies only labels the repository already defines;
-   a documentation label fits if there is one.
-7. **STOP.** Report the ledger, the phase list and the audit verdict. Say plainly
-   that nothing is built yet and that merging is the gate.
+   findings were structural. Do not carry Critical or High findings forward.
+6. **Commit the spec** on this branch. Do **not** open a PR for it: it rides in
+   the unit's one PR, beside the code.
+7. **STOP and wait for the user's OK.** Report the ledger, the phase list and the
+   audit verdict, name the worktree, and say plainly that nothing is built yet.
+   **Nothing runs until they say so** — not the dry run, not the loop.
 
 Nothing gates on lines: `.loop/unit-size.sh` reports and always exits 0. What
 bounds a session is the phase it is given.
 
 ## Phase B — the loop
 
-0. **Drive from a tree nobody else is editing.** The loop reads the spec and the
-   settings from the tree you invoke it in, and the session it starts commits with
-   `git add -A`, so someone else's uncommitted work there is swept into the unit.
-   Pre-flight refuses a dirty tree and a tree behind `origin/main`; commit, stash
-   or pull first. Do **not** create a worktree for this: the sandbox mounts
-   `$ROOT/.git`, which in a linked worktree is a file pointing into the main repo,
-   and the container would not resolve the repository at all.
+0. **Run it from the feature's own worktree.** The tree is already on the unit's
+   branch and already holds the spec, so the loop builds **in place**: no second
+   worktree, no checkout, and no reclaim on any path — the tree was there before
+   the run and outlives it. `--dry-run` says `building in place` and names the
+   tree; if it does not, the branch does not match the ledger's and you are in the
+   wrong tree.
+
+   While a run is in flight the worktree is the loop's. A session commits with
+   `git add -A`, so anything left uncommitted there is swept into the unit —
+   pre-flight refuses a dirty tree for exactly that reason, and refuses one behind
+   the branch's own upstream. Being behind `origin/main` is fine and expected; if
+   `main` has moved far enough to matter, `git rebase origin/main` in the worktree
+   before the run.
 
 1. **Plan first, always.**
    ```sh
@@ -99,8 +107,8 @@ bounds a session is the phase it is given.
    ```sh
    .loop/delivery-loop.sh .ai/specs/{file}.md
    ```
-   The loop creates one worktree and runs one fresh `claude -p` per unticked
-   phase, on `LOOP_MODEL` (default `opus`). Each session implements its phase
+   The loop runs one fresh `claude -p` per unticked phase in this worktree, on
+   `LOOP_MODEL` (default `opus`). Each session implements its phase
    directly, runs the gates, commits, ticks the phase under `## Progress`,
    rewrites the notes beneath the checklist, pushes and writes `CONTINUE`. The
    loop reads the tick from origin — a `CONTINUE` whose phase is not ticked is an
@@ -121,8 +129,14 @@ semicolon-separated list of shell commands run from the repo root, in order
 
 **If the loop pauses (exit 5), the account's usage limit is reached.** Nothing is
 wrong with the unit. Say so, and when the user says to continue, re-run the same
-command: the loop reads the ticks on the branch and carries on from the first
-unticked phase.
+command: the loop **continues the refused session** — `claude --resume` on the id
+in `.loop/state/units/<branch>/session`, in the worktree that session left — rather
+than rebuilding its phase. A session commits once, at the end of its phase, so the
+refused one's work is uncommitted in that worktree and nowhere else. Built in
+place, that worktree is the user's own and is never reclaimed by anything; deleting
+`units/<branch>/session` is what refuses the resume, and that is the user's call,
+not yours. `--dry-run` prints the decision as a `resume:` line and changes nothing,
+so it is safe to run first.
 
 **Read the telemetry, every time.** A session's peak context is the only evidence
 that its phase was cut to a size one session can hold. A row over the alarm means
@@ -136,7 +150,19 @@ It stopped because the unit is **finished and wrong**, which is not the same as
 unfinished. Never retry it blindly. Read `.loop/state/<branch>.json` — the last
 session's whole result is there, and it is the only thing that can explain a
 failure the one-line sentinel cannot. Every session's result is beside it as
-`<branch>.s<run>-<n>.json`.
+`<branch>.s<run>-<pid>-<n>.json`.
+
+The worktree is still there. If the session wrote **no** sentinel — it stopped to
+ask, timed out, or was killed — so is `.loop/state/units/<branch>/session`, naming
+the phase that was in flight, and a re-run resumes that session rather than
+rebuilding its phase: answering the question and re-running is the ordinary path. A
+session that wrote `ESCALATE:` reported on itself and had its say, so its record is
+dropped; the worktree stays, and a re-run builds that phase fresh in it. Either way,
+read the worktree before deciding anything — an escalation leaves work on disk that
+no commit mentions. Built in place, the worktree is the user's own — do not offer to
+reclaim it at all. A worktree the loop created (a run driven from `main`) goes with
+`.loop/reclaim-worktree.sh <path>`, and only once the user has decided what happens
+to that work.
 
 | Sentinel / signal | What actually happened |
 |---|---|
@@ -155,8 +181,11 @@ failure the one-line sentinel cannot. Every session's result is beside it as
 
 ## Never
 
-- **Never** run Phase B before the spec is on `origin/main`. The worktree will
-  not contain it.
+- **Never** run Phase B before the user has said OK to the spec. Gate 1 is theirs,
+  and an unread spec built overnight is the one failure this whole flow exists to
+  prevent.
+- **Never** open a PR for the spec, and never put it on a branch of its own. It is
+  the unit's first commit and ships in the unit's one PR.
 - **Never** skip the `--dry-run`.
 - **Never** merge anything on the user's behalf. Both gates are theirs.
 - **Never** open a PR per phase. The phases are commits on one branch behind one PR.
