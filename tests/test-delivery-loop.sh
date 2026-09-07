@@ -1428,6 +1428,15 @@ fresh speccleanup
 if run_loop && grep -qx 'clean-worktree' "$LOOP_TEST_DIR/make-targets.txt"; then pass
 else fail "make targets: $(sort -u "$LOOP_TEST_DIR/make-targets.txt" | tr '\n' ' ')"; fi
 
+# EVERY GATE RUNS. A gate is a child process that inherits the loop's stdin, and a real `make lint`
+# reads it (docker compose does). The gate list must therefore never travel on that stdin, and each
+# gate must be run on an empty one -- or the first gate eats the rest of the list and the run proves
+# `make lint` alone while reporting the unit green. The stub drains stdin for exactly this reason.
+CASE="every gate the spec names runs on the host, even when the first one reads stdin"
+if grep -qx 'lint' "$LOOP_TEST_DIR/make-targets.txt" && grep -qx 'test' "$LOOP_TEST_DIR/make-targets.txt" \
+   && grep -q 'gate: make test' "$TMP/out" && grep -q 'PR 1: 2 gates green: make lint; make test' "$TMP/out"; then pass
+else fail "make targets: $(sort -u "$LOOP_TEST_DIR/make-targets.txt" | tr '\n' ' ') / $(grep -E 'gate' "$TMP/out" | tr '\n' ';')"; fi
+
 CASE="the denials the spec names are handed to every session"
 if [ "$(grep -cx 'Bash(make deploy)' "$LOOP_TEST_DIR/denials.txt")" = 7 ] \
    && grep -qx 'Bash(gh pr merge \*)' "$LOOP_TEST_DIR/denials.txt"; then pass

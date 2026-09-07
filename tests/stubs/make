@@ -9,6 +9,11 @@
 #   flaky  the FIRST `make lint` fails and everything after passes -- a toolchain that fell over
 #          (a package install dying under load) rather than a unit that is wrong. Escalating on it
 #          would cost a whole unattended night for a run that was correct.
+#
+# A gate drains its stdin, as the real thing does: `make lint` in a host runs `docker compose`,
+# which reads whatever stdin it inherits. The loop once fed its gate list to `read` through a
+# heredoc and ran each gate on that same stdin, so the first gate ate every line after it and only
+# `make lint` was ever proven. The drain keeps that failure visible to the suite.
 
 set -euo pipefail
 
@@ -18,6 +23,7 @@ printf '%s\n' "${1:-}" >> "${LOOP_TEST_DIR:-/dev/null}/make-targets.txt" 2>/dev/
 case "${1:-}" in
   clean-worktree) exit 0 ;;
   lint|test)
+    [ -t 0 ] || cat > /dev/null
     case "${LOOP_TEST_MAKE:-ok}" in
       fail) exit 1 ;;
       flaky)
