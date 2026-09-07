@@ -10,14 +10,16 @@ description: "Review code changes (PR, diff, branch, commit) against the host re
 > **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
 > text means that one, never a host skill sharing the name.
 
-## Superpowers Integration
+## Method
 
-Invoke before starting this workflow:
-- `superpowers:dispatching-parallel-agents` — the 3 reviewer agents MUST be dispatched in a
-  **single response** for true parallel execution alongside the gate.
-- `superpowers:receiving-code-review` — when acting on reviewer output: verify before
-  implementing, push back with technical reasoning if a finding is wrong, never implement
-  unverified suggestions.
+Where this skill needs a way of working, it takes, in order: the skill the host's root `AGENTS.md` /
+`CLAUDE.md` routes that job to; else a skill in your own skill list that does it; else the steps here.
+
+- **One response, three reviewers and the gate.** Dispatch the reviewer agents and start the gate
+  in a single response, so they run in parallel.
+- **Acting on a finding.** Verify it against the code before changing anything: open the file, read
+  the line, confirm the claim. A finding that is wrong is answered with the technical reason, not
+  applied to keep the peace. A suggestion nobody verified is never implemented.
 
 All reviewer agents run with `model: "opus"`. The main thread (current session) synthesises
 findings and runs the gate concurrently.

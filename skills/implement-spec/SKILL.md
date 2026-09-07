@@ -1,6 +1,6 @@
 ---
 name: implement-spec
-description: "Implement an approved spec from .ai/specs/, phase by phase, on the subagent-driven-development engine with the verification gate enforced as the per-phase review rubric and a single code review once all phases are done. Triggers on \"implement spec\", \"build from spec\", \"code the spec\", \"implement phase X\"."
+description: "Implement an approved spec from .ai/specs/, phase by phase — a fresh implementer per phase, the verification gate as the per-phase review rubric, and a single code review once all phases are done. Triggers on \"implement spec\", \"build from spec\", \"code the spec\", \"implement phase X\"."
 ---
 
 # Implement Spec
@@ -10,16 +10,15 @@ description: "Implement an approved spec from .ai/specs/, phase by phase, on the
 > **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
 > text means that one, never a host skill sharing the name.
 
-Execute an approved spec under `.ai/specs/{date}-{slug}.md`. This skill is an **overlay on
-`superpowers:subagent-driven-development` (SDD)**: SDD owns the execution *machinery*
-(per-task fresh implementer, ledger, review package, fix loop); this skill owns the *mapping* —
-what a task is, and what the reviewer's rubric is.
+Execute an approved spec under `.ai/specs/{date}-{slug}.md`, one phase at a time, each phase by an
+implementer that starts with no inherited context. This skill owns the *mapping* — what a task is,
+who builds it, and what the reviewer's rubric is.
 
 ## Two ways in
 
-**Interactive** — a human runs `/implement-spec` in a worktree. This session is the SDD
-controller: it dispatches a fresh implementer subagent per phase, reviews each against the gate
-rubric, and after the last phase runs the final review, `/archive-spec` and `/open-pr`.
+**Interactive** — a human runs `/implement-spec` in a worktree. This session is the **controller**:
+it dispatches a fresh implementer subagent per phase, reviews each against the gate rubric, and
+after the last phase runs the final review, `/archive-spec` and `/open-pr`.
 
 **Driven by the delivery loop** — the session's prompt names one `Phase:`. Then **this session
 is the implementer** of that one phase: it dispatches no implementer subagent, runs neither
@@ -27,6 +26,25 @@ is the implementer** of that one phase: it dispatches no implementer subagent, r
 process per phase is what keeps the loop's context small, and a controller-plus-implementer
 layer inside it would double the context for nothing. The per-phase rubric below is the same on
 both paths.
+
+## Method
+
+Where this skill needs a way of working, it takes, in order: the skill the host's root `AGENTS.md` /
+`CLAUDE.md` routes that job to; else a skill in your own skill list that does it, whichever plugin
+provides it; else the steps written here. Nothing outside this plugin is required.
+
+- **Test first.** Write the failing test the phase's section names, run it and watch it fail for the
+  reason expected, write the minimum code that passes, refactor with the test green. No production
+  code lands before a failing test that wants it.
+- **Verify before claiming done.** Read the complete gate output. DONE means every gate exited 0
+  and you read zero errors; a summary line or a green-looking tail is not evidence.
+- **Debug systematically** when a failure spans several files: reproduce it, read the whole
+  failure, form one hypothesis, test that hypothesis before changing code, and change one thing
+  at a time. Never patch the symptom to turn the gate green.
+- **There is no separate plan.** The spec phase IS the task brief. A phase too coarse to hand a
+  blind implementer — several independent files with non-obvious interfaces between them — is split
+  in the dispatch brief into ordered sub-tasks, each with its files and its test, and built in that
+  order by the same implementer; the spec's phase stays the unit that is ticked.
 
 ## The execution model — one spec phase = one task
 
@@ -37,37 +55,13 @@ A spec is one **delivery unit** — one branch, one PR — named by the checklis
 Each phase is built with **zero inherited session context**: interactively by a fresh
 implementer subagent briefed from the phase text plus the interfaces earlier phases produced,
 under the loop by a fresh process. Either way a phase cannot drift on half-remembered
-conversation, and the ledger survives compaction.
+conversation, and the record survives compaction: the spec's own `## Progress` checklist and
+`git log` are the ledger, and there is no other.
 
-You do **not** need a separate `writing-plans` pass. The spec phase IS the task brief. Reach
-for `superpowers:writing-plans` only when a single phase is too coarse to hand a blind subagent
-— it spans several independent files with non-obvious interfaces between them. Then decompose
-that one phase into `writing-plans` tasks and run them as SDD sub-tasks; the rest of the spec
-still runs phase-as-task.
-
-## Superpowers integration
-
-**Primary engine (interactive) — invoke and follow it:**
-- `superpowers:subagent-driven-development` — owns the task loop. Use its `sdd-workspace` and
-  `task-brief` scripts, its ledger (`<workspace>/progress.md`), its 5-round fix loop with model
-  escalation, and its final whole-branch review. **Do not re-implement any of that here.**
-  Under the loop, skip the engine: the loop is the controller.
-
-**Invoked by whoever implements a phase — the subagent interactively, this session under the loop:**
-- `superpowers:test-driven-development` — Red → Green → Refactor within the phase; no
-  production code before a failing test.
-- `superpowers:verification-before-completion` — read full gate output, confirm 0 errors before
-  reporting DONE.
-
-**Two overlays this skill contributes to the SDD loop:**
-
-1. **Task mapping** — one spec phase = one task. The interactive implementer subagent runs with
-   `model: "opus"`.
-2. **The per-task review rubric IS the host's verification gate.** Where vanilla SDD dispatches
-   a generic `task-reviewer`, here the per-phase review runs `/sync-context-docs` →
-   `/run-gates` as its pass/fail criteria. `/code-review` is **not** part of the per-phase
-   rubric — it runs once, over the whole branch, so review reasons about the finished feature
-   instead of re-reviewing churn each phase.
+**The per-phase review rubric IS the host's verification gate.** The per-phase review runs
+`/sync-context-docs` → `/run-gates` as its pass/fail criteria. `/code-review` is **not** part of
+the per-phase rubric — it runs once, over the whole branch, so review reasons about the finished
+feature instead of re-reviewing churn each phase.
 
 ## Prerequisites
 
@@ -104,11 +98,9 @@ If any precondition fails, stop and inform the user — under the loop, write
    <loop>/parse-ledger.sh <spec-file> --skills "Phase N"   # one host skill per line
    ```
    Under the loop the prompt repeats them as a `Skills:` line.
-5. Interactively: resolve the SDD workspace with `scripts/sdd-workspace <spec-file>` and check
-   for an existing ledger at `<workspace>/progress.md`. A ledger whose first line names **this
-   spec file** means work is resumable — phases with a `Task <N>: complete` line are DONE;
-   resume at the first phase without one. The spec's own `## Progress` checklist is the record
-   that survives across sessions and machines; the SDD ledger is this session's scratch.
+5. Interactively: the first unticked phase under `## Progress` is where work resumes. There is no
+   scratch ledger to consult; a phase is done when its line is ticked and its commit is on the
+   branch, and `git log` confirms the second.
 6. Read the spec once. Note its Global Constraints (version floors, naming and copy rules, the
    rules that bind every phase). Scan for cross-phase conflicts and batch them to the user
    before dispatching phase 1. This batch is an **escalation, not a routine confirmation** — it
@@ -125,11 +117,14 @@ For each unticked phase, in order.
 ### 1. Dispatch the implementer
 
 Interactively, record BASE (`git rev-parse HEAD`) first and build the brief from the phase text
-— do **not** paste prior-phase summaries or session history. The dispatch carries: one line on
-where the phase fits; the phase's deliverables, files and tests verbatim; the interfaces earlier
-phases produced (exact signatures the fresh subagent cannot otherwise know); the spec's Global
-Constraints; and the build rules below. Under the loop, you are the implementer and the rules
-bind you directly:
+— do **not** paste prior-phase summaries or session history. The dispatch is one subagent with
+`model: "opus"`, and it carries: one line on where the phase fits; the phase's deliverables,
+files and tests verbatim; the interfaces earlier phases produced (exact signatures the fresh
+subagent cannot otherwise know); the spec's Global Constraints; the host's skills the phase
+names; and the build rules below. It ends by asking for a one-word report — `DONE`,
+`DONE_WITH_CONCERNS` followed by the concerns, `NEEDS_CONTEXT` followed by the question, or
+`BLOCKED` followed by the reason. Under the loop, you are the implementer and the rules bind you
+directly:
 
 - **Resolve before writing.** Every type, field, class and file the phase names must resolve
   against the spec and the tree. A contradiction is an escalation, never something to improvise
@@ -141,9 +136,9 @@ bind you directly:
   when the spec was approved; a session that hand-rolls what the host has a skill for produces
   code the host's conventions do not recognise. Interactively, the list goes into the dispatch
   brief verbatim. A named skill that does not exist is an escalation, not something to skip.
-- **Test first, always.** Invoke `superpowers:test-driven-development` and follow it: write the
-  failing test the phase's section names, watch it fail, write the minimum code that passes,
-  refactor with the test green. No production code lands before a failing test that wants it.
+- **Test first, always** — the Method above, or the host's own test-first skill where its
+  `AGENTS.md` names one: the failing test the phase's section names, watched to fail, then the
+  minimum code, then the refactor with the test green.
 - **Follow the host's conventions.** The root `AGENTS.md` / `CLAUDE.md` and the nearest one to
   the code being touched are binding: layout, naming, layering, dependency rules, whatever they
   declare. Where they are silent, follow the shape of the surrounding code.
@@ -155,14 +150,16 @@ bind you directly:
 
 ### 2. Handle the report
 
-Interactively, per SDD: DONE → review; DONE_WITH_CONCERNS → read concerns first; NEEDS_CONTEXT
-→ provide and re-dispatch; BLOCKED → assess (context vs. model vs. too-large vs.
-plan-wrong→escalate). If the spec proves wrong mid-phase, stop, update the spec, re-run
-`/pre-implement-spec`, then resume.
+Interactively: `DONE` → review; `DONE_WITH_CONCERNS` → read the concerns before anything else, and
+treat one that names a spec contradiction as `BLOCKED`; `NEEDS_CONTEXT` → answer it from the spec
+and the tree and re-dispatch the same implementer; `BLOCKED` → decide which it is — missing context
+(provide it), a phase too large for one brief (split it, per the Method), or a spec that is wrong
+(stop, update the spec, re-run `/pre-implement-spec`, then resume at this phase). Never build the
+phase yourself in the controller session.
 
 ### 3. Per-phase review — the gate IS the rubric
 
-This replaces SDD's generic `task-reviewer`. Every phase must pass before its line is ticked:
+Every phase must pass before its line is ticked:
 
 1. **`/sync-context-docs`** — update the docs for every directory the phase touched, and the
    spec's Changelog.
@@ -175,12 +172,13 @@ failure opens the fix loop.
 
 ### 4. Fix loop
 
-Interactively, exactly SDD's loop — 5 rounds max, rounds 1-3 resume the implementer, rounds 4-5
-a fresh implementer on a more capable model, every round ending with a scoped re-review (re-run
-the failing gate on the fix diff). Never fix findings yourself in the controller session. At the
-cap, adjudicate per SDD's breaker (park with a ruling, or STOP + BLOCKED on load-bearing
-findings). Under the loop, fix and re-run the failing gate yourself; a gate you cannot turn
-green is an `ESCALATE`.
+Interactively, at most **five rounds**. Rounds 1–3 resume the same implementer with the failing
+gate's complete output and nothing else added; rounds 4–5 dispatch a fresh implementer on the most
+capable model available, briefed with the phase and the failure. Every round ends with a scoped
+re-check: re-run the failing gate on the fix diff. Never fix findings yourself in the controller
+session — the implementer that has the context fixes them. At the cap, stop: report the failing
+gate, the five attempts and what each changed, and hand the decision to the user. Under the loop,
+fix and re-run the failing gate yourself; a gate you cannot turn green is an `ESCALATE`.
 
 ### 5. Complete the phase
 
@@ -189,8 +187,6 @@ green is an `ESCALATE`.
 - **Tick the phase** in the spec's `## Progress` checklist and rewrite the notes beneath it:
   what you learned that the spec does not say, what the next phase must know. Commit that with
   the phase or as a docs commit. Under the loop the tick is read from origin, so push it.
-- Interactively, append the SDD ledger line:
-  `Task <N>: complete (commits <base7>..<head7>, gates green)`.
 - Interactively, **pause** and confirm with the user before the next phase — **unless** they
   said "implement all without stopping", in which case run continuously. Under the loop, write
   `CONTINUE` to the sentinel and exit; the next phase is another session's.
@@ -221,13 +217,11 @@ fresh session and the prompt names the step; run only that step, push, and write
 - `<loop>/reclaim-worktree.sh .claude/worktrees/<name>` from the main repo — it removes the
   worktree and prunes.
 - `git branch -d feat-<slug>`.
-- The SDD workspace (`.superpowers/sdd/<spec-basename>/`) is git-ignored scratch; delete it once
-  the final review is clean — git history is the record.
 
 ## When things go wrong
 
 - A gate fails on the current phase → routes into the fix loop. When the root cause spans several
-  files, invoke `superpowers:systematic-debugging` before touching code.
+  files, debug systematically (the Method above) before touching code.
 - The spec proves wrong mid-implementation → stop, update the spec, re-run
   `/pre-implement-spec`, then resume at the current phase. Under the loop, `ESCALATE` instead:
   the spec is a human's gate.
@@ -262,11 +256,11 @@ After all phases:
    3. git branch -d feat-<slug>
 ```
 
-Report `clean` only when **no** unresolved findings remain. Anything parked or deferred by SDD's
-breaker is listed by count and severity, never folded into `clean`.
+Report `clean` only when **no** unresolved findings remain. Anything parked at the fix loop's cap
+is listed by count and severity, never folded into `clean`.
 
-If autonomous (the user said "implement all phases without stopping"), proceed without asking —
-per SDD's continuous-execution rule. Autonomous mode skips **routine confirmations only** (the
-end-of-phase "proceed?" pause). It does **not** suppress an escalation: a failed precondition,
-an unresolved cross-phase conflict from the pre-flight scan, a BLOCKED implementer report, or a
-fix loop that hits its round cap still stops the run and goes to the user.
+If autonomous (the user said "implement all phases without stopping"), proceed without asking.
+Autonomous mode skips **routine confirmations only** (the end-of-phase "proceed?" pause). It does
+**not** suppress an escalation: a failed precondition, an unresolved cross-phase conflict from the
+pre-flight scan, a BLOCKED implementer report, or a fix loop that hits its round cap still stops the
+run and goes to the user.
