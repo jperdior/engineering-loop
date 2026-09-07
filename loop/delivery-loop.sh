@@ -1861,15 +1861,23 @@ prove_unit() {
 }
 
 # The host's gates, in order, from the unit's worktree. The first red one stops the run.
+#
+# The list is split into an array and each gate runs on an empty stdin. A gate is a child process
+# that inherits the loop's stdin, and a real `make lint` reads it -- `docker compose` does -- so a
+# list fed to `read` through a heredoc lost every line after the first gate consumed it: `make lint`
+# ate `make test`, and the unit was reported green on lint alone. The closing line names every gate
+# that ran, so a gate that did not is visible in the log rather than inferred from its absence.
 run_gates() {
   local wt="$1" gate
-  while IFS= read -r gate; do
+  local -a gates=() ran=()
+  IFS=';' read -r -a gates <<< "$LOOP_GATES"
+  for gate in "${gates[@]}"; do
     [ -n "$gate" ] || continue
     log "$UNIT: gate: $gate"
-    ( cd "$wt" && bash -c "$gate" ) || return 1
-  done <<EOF
-$(printf '%s' "$LOOP_GATES" | tr ';' '\n')
-EOF
+    ( cd "$wt" && bash -c "$gate" </dev/null ) || return 1
+    ran+=("$gate")
+  done
+  log "$UNIT: ${#ran[@]} gates green: $(printf '%s; ' "${ran[@]}" | sed 's/; $//')"
   return 0
 }
 
