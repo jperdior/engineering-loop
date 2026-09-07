@@ -110,7 +110,7 @@ wins.
 | `LOOP_SANDBOX` | `0` | `1` runs each session in a container with no host credentials; needs `setup-loop.sh` for the two tokens and `sandbox/build.sh` for the image, both in the plugin's `loop/` |
 | `MAX_SESSIONS` | phases + 4 | sessions per run before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
-| `SESSION_CONTEXT_ALARM` | `150000` | peak context above which a phase is reported as cut too large |
+| `SESSION_CONTEXT_ALARM` | half the model window | context, in tokens, above which a phase is reported as cut too large; unset, half of the session model's context window |
 | `DELIVERY_LOOP_NOTIFY` | unset | a command that receives the headline when the loop needs you |
 
 The gates, the worktree cleanup and the extra denials are not settings: they come from each spec's

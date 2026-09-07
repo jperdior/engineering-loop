@@ -1,6 +1,6 @@
 {
   "name": "engineering-loop",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "From a feature request to a reviewed pull request: interview, spec, audit, one fresh session per spec phase, review, PR. Two human gates: the spec and the PR.",
   "author": {
     "name": "Julio Perdiguer"
