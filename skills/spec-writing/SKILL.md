@@ -7,6 +7,8 @@ description: "Draft or review architectural specs under .ai/specs/. Use when sta
 
 > **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
 > (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
 
 Design and review specifications against **the host repository's own conventions**, as written in its
 root `AGENTS.md` / `CLAUDE.md` and in the nearest such file to the code the spec touches. Adopt the

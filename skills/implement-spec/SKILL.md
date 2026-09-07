@@ -7,6 +7,8 @@ description: "Implement an approved spec from .ai/specs/, phase by phase, on the
 
 > **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
 > (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
 
 Execute an approved spec under `.ai/specs/{date}-{slug}.md`. This skill is an **overlay on
 `superpowers:subagent-driven-development` (SDD)**: SDD owns the execution *machinery*

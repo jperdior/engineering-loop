@@ -26,10 +26,14 @@ if ! ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
   exit 3
 fi
 BRANCH="$(git branch --show-current 2>/dev/null || echo detached)"
+# The repository's name is the main checkout's, not the worktree directory's, which in a linked
+# worktree is the branch name and would name the log `feat-x-feat-x.log`.
+MAIN_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+[ -n "$MAIN_ROOT" ] || MAIN_ROOT="$ROOT"
 
 RUNS="${XDG_STATE_HOME:-$HOME/.local/state}/engineering-loop/runs"
 mkdir -p "$RUNS"
-LOG="$RUNS/$(basename "$ROOT")-$BRANCH.log"
+LOG="$RUNS/$(basename "$MAIN_ROOT")-$BRANCH.log"
 
 # `set -m` puts the child in its own process group, so a signal to this shell's group does not reach
 # it; nohup detaches it from the terminal. The exit line is written by the wrapper, not the loop, so

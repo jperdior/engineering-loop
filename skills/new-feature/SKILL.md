@@ -5,6 +5,9 @@ description: "Create an isolated git worktree on a new branch from main and ente
 
 # New Feature
 
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
+
 Spin up an isolated worktree from `main` so the feature has its own branch and working tree without touching the main checkout.
 
 > **A feature is one worktree, one branch, one PR.** Driven by hand, that worktree carries the spec and its implementation together.

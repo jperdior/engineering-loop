@@ -7,6 +7,8 @@ description: "Audit a spec before implementation. Produce a readiness report —
 
 > **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
 > (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
 
 ## Superpowers Integration
 

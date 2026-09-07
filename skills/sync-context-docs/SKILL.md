@@ -5,6 +5,9 @@ description: "Update or create the AGENTS.md nearest to every directory the bran
 
 # Sync Context Docs
 
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
+
 After implementing a phase or a feature, update (or create) the documentation that governs every
 directory the branch touched, so future agents do not have to re-read all the code to learn what
 it does.

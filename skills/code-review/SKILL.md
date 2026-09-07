@@ -7,6 +7,8 @@ description: "Review code changes (PR, diff, branch, commit) against the host re
 
 > **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
 > (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
 
 ## Superpowers Integration
 
@@ -91,8 +93,8 @@ it; error paths handled rather than swallowed.
 
 **NEVER claim "ready to merge" without running the gate.**
 
-Invoke `/run-gates`. It reads the host's `LOOP_GATES` from `~/.config/engineering-loop/loop.env` and dispatches each
-command as a parallel subagent.
+Invoke `/run-gates`. It reads the gate commands from the spec this branch carries (`## Gates`),
+else from the host's `AGENTS.md` validation section, and dispatches each as a parallel subagent.
 
 Rules:
 - Every failure is a finding, even when it also fails on the base. If it fails on the branch,
@@ -111,7 +113,7 @@ Rules:
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| `{command from LOOP_GATES}` | PASS/FAIL | |
+| `{gate command from the spec}` | PASS/FAIL | |
 
 ## Findings
 
@@ -157,3 +159,10 @@ declaration, a spec requirement not built.}
 The host's documented rules are the standard — the root `AGENTS.md` / `CLAUDE.md` and the
 nearest one to each changed directory. A finding that cites no documented rule and no spec
 requirement is at most **Low**, and says so.
+
+**A fix wave stays inside the spec's scope.** When the review is followed by fixes, they touch the
+unit's own code and tests. A finding against a host skill, an `AGENTS.md` or any other doc beyond
+what the spec names — a template that teaches the wrong thing, a rule the change revealed as
+incomplete — is written into the review as a **proposal**, with the exact edit, and not applied.
+The user approved the spec's scope at gate 1; a doc change they did not see there is theirs to
+approve on the PR, not the reviewer's to make.

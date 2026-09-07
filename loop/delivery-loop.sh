@@ -1270,6 +1270,11 @@ with the reviewers on opus. Resolve every Critical and High finding in one fix w
 push it. Then /run-gates $UNIT_BASE in the foreground until every in-scope gate is green, and one
 scoped re-review of the fix diff; commit and push. A finding you cannot resolve without a human is
 an ESCALATE, not a note in the PR.
+
+The fix wave edits the unit's own code and tests. A finding against a host skill, an AGENTS.md or
+another doc beyond what the spec names is written into the review as a proposal and left alone:
+the user approved the spec's scope at gate 1, and a doc change they did not approve is not yours
+to make.
 BLOCK
     ;;
     archive) cat <<BLOCK
@@ -1934,7 +1939,7 @@ record_telemetry() {
     [ "$(jq -r '.is_error // false' "$json" 2>/dev/null)" != "true" ] || continue
     rows="$rows$(jq -r --arg alarm "$SESSION_CONTEXT_ALARM" '
       ([.usage.iterations[]? | (.cache_read_input_tokens//0) + (.cache_creation_input_tokens//0) + (.input_tokens//0)] | max) as $peak |
-      "| " + (.loop_phase // "closing") + " | " + (.num_turns|tostring) + " | $" + ((.total_cost_usd*100|round/100)|tostring)
+      "| " + (.loop_phase // "closing") + " | " + (.num_turns|tostring)
         + " | " + (($peak // 0)|tostring) + (if ($peak // 0) > ($alarm|tonumber) then " ⚠" else "" end)
         + " | " + ((.duration_ms/60000|round)|tostring) + " min | " + ((.modelUsage | keys | join(", ")) // "?") + " |"
     ' "$json" 2>/dev/null || true)
@@ -1951,7 +1956,9 @@ record_telemetry() {
     [ -z "$pr_number" ] || printf '| PR | #%s |\n' "$pr_number"
     printf '| size | %s |\n' "$measured"
     printf '| context alarm | %s |\n\n' "$SESSION_CONTEXT_ALARM"
-    printf '| session | turns | cost | peak context | wall clock | model |\n|---|---|---|---|---|---|\n'
+    # No cost column: peak context is the number that says whether the phasing held, and a notional
+    # API-equivalent beside it is read as a bill nobody pays.
+    printf '| session | turns | peak context | wall clock | model |\n|---|---|---|---|---|\n'
     printf '%s' "$rows"
   } > "$file"
 }
