@@ -85,10 +85,13 @@ common case, not the exception.
    message lands in the transcript. The script exists so the values never pass through a
    conversation.
 
-1. **Interview.** Invoke `superpowers:brainstorming`. This is the one place the
-   user's attention is worth most, so spend it here: scope, the decisions with
-   more than one defensible answer, what is explicitly out. Ask questions in
-   batches, not one at a time.
+1. **Interview.** A design conversation before anything is written. Use the skill the
+   host's `AGENTS.md` routes design or brainstorming to; else one in your own skill list
+   that does it; else this: read the brief and the code it touches, list the decisions
+   with more than one defensible answer, ask them **in one batch** with a recommended
+   option each, and end with a short written summary the user confirms. This is the one
+   place the user's attention is worth most, so spend it here: scope, the open decisions,
+   what is explicitly out. Never one question at a time.
 
    **Ask about the product, never about the delivery mechanics.** How the work is
    cut, how many PRs it becomes — none of these are questions for the user. The

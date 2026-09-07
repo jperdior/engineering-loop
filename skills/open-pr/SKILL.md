@@ -13,13 +13,6 @@ description: "Open a GitHub PR for the current branch with a templated body, lab
 Open a PR for the work already on the current branch (the branch must have commits ahead of the
 base).
 
-## Superpowers Integration
-
-Invoke before starting this workflow:
-- `superpowers:finishing-a-development-branch` — structured branch-completion flow: verify tests
-  → detect environment → present 4 options (merge locally, push+PR, keep, discard). Can replace
-  steps 1-3 of this skill.
-
 ## Workflow
 
 0. **The base is `main`.**

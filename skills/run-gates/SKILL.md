@@ -18,12 +18,13 @@ themselves.
 gates are independent, so they run in **parallel** and each is read to completion before it is
 called green.
 
-## Superpowers Integration
+## Method
 
-- `superpowers:dispatching-parallel-agents` — dispatch every gate as its own subagent in a
-  single message.
-- `superpowers:verification-before-completion` — read each subagent's COMPLETE output and
-  confirm 0 errors before reporting PASS. Evidence before assertions.
+- **One message, one subagent per gate.** Dispatch every gate in a single response so they run in
+  parallel; one per response runs them in sequence and multiplies the wall clock.
+- **Evidence before the verdict.** Read each subagent's complete output. PASS means exit 0 **and**
+  zero errors read in the output; a summary line, a green-looking tail or the subagent's own word is
+  not evidence. A gate you did not read is a gate that did not pass.
 
 ## Where the gates come from
 

@@ -22,7 +22,6 @@ In Claude Code:
 ```
 /plugin marketplace add jperdior/engineering-loop
 /plugin install engineering-loop@engineering-loop
-/plugin install superpowers@claude-plugins-official
 ```
 
 That is the whole install. **Nothing is written into your repository**: the skills and the loop
@@ -30,10 +29,10 @@ live in the plugin, your settings in `~/.config/engineering-loop/loop.env`, the 
 `~/.local/state/engineering-loop/`. The only files the engine ever adds to a repository are the specs
 you approve, which ship in the PR they describe.
 
-The skills invoke a few of [superpowers](https://github.com/obra/superpowers)' (brainstorming,
-test-driven development, parallel subagents); Claude Code plugins cannot declare dependencies, so it
-is installed alongside. You also need `git`, `jq`, GNU `timeout` (`brew install coreutils` on macOS),
-and an authenticated `gh`.
+The plugin depends on no other. Where a skill needs a way of working — a design conversation, test
+first, verifying before claiming done — it uses the skill your repository's `AGENTS.md` routes that
+job to, else one you have installed, else the steps it carries itself. You also need `git`, `jq`,
+GNU `timeout` (`brew install coreutils` on macOS), and an authenticated `gh`.
 
 ## Use
 

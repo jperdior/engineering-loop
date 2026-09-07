@@ -10,12 +10,10 @@ description: "Audit a spec before implementation. Produce a readiness report —
 > **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
 > text means that one, never a host skill sharing the name.
 
-## Superpowers Integration
+## Method
 
-Invoke before starting this workflow:
-- `superpowers:dispatching-parallel-agents` — the audit agents (four for a full spec) MUST be dispatched in a **single response** for true parallel execution; dispatching one-per-response produces sequential execution and quadruples the time.
-
-The audit agents (step 3) run with `model: "opus"`. The main thread synthesises their reports in step 4.
+The audit agents (four for a full spec) are dispatched in a **single response**, so they run in
+parallel; one per response runs them in sequence and quadruples the time. They run with `model: "opus"`. The main thread synthesises their reports in step 4.
 
 Audit a spec under `.ai/specs/` before any code is written. Output a **Readiness Report** that surfaces gaps, BC risks, missing coverage, and hidden assumptions. Goal: catch issues that would otherwise force mid-implementation rework.
 

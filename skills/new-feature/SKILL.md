@@ -16,12 +16,14 @@ Spin up an isolated worktree from `main` so the feature has its own branch and w
 >
 > Building a later unit of a spec whose ledger declares a deployment seam? Name this branch exactly as its `## Delivery` line does; the ledger binds units to branch names. Re-verify the spec's **Current State** section before implementing — `main` has moved since the previous unit merged.
 
-## Superpowers Integration
+## Method
 
-Invoke before starting this workflow:
-- `superpowers:using-git-worktrees` — confirms existing worktree isolation before creating a new one; ensures `EnterWorktree` is preferred over raw `git worktree add`.
-
-> If the feature scope is unclear, invoke `superpowers:brainstorming` before creating the worktree to design the approach before branching.
+- **Check before creating.** `git worktree list` first: a worktree already on this branch is entered,
+  not duplicated. Prefer the `EnterWorktree` tool over a raw `git worktree add`; it creates, enters
+  and registers the tree in one step.
+- **Design before branching when the scope is unclear.** Have the design conversation `/ship` step 1
+  describes — or the skill the host's `AGENTS.md` routes design to — before naming a branch after
+  a feature nobody has agreed on.
 
 ## Workflow
 

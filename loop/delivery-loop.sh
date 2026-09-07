@@ -230,14 +230,10 @@ CONTAINER_N=0
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 LOOP_SANDBOX="${LOOP_SANDBOX:-0}"
 
-# The container has no plugins of its own, so a sandboxed session is handed this plugin and, when the
-# host has it installed, superpowers, through `--plugin-dir`. On the host the session inherits the
-# user's own installs and needs neither.
-SUPERPOWERS_DIR=""
-for __sp in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/superpowers/*/; do
-  [ -d "$__sp" ] && SUPERPOWERS_DIR="${__sp%/}"
-done
-unset __sp
+# The container has no plugins of its own, so a sandboxed session is handed this plugin through
+# `--plugin-dir`. It needs no other: every skill carries its own steps for what it would otherwise
+# borrow, and the host's skills live in the repository the container mounts. On the host the session
+# inherits the user's own installs.
 LOOP_IMAGE="${LOOP_IMAGE:-engineering-loop:local}"
 
 # Resolved by pre-flight from inside a container; empty when the sandbox is off.
@@ -1618,7 +1614,6 @@ run_claude_sandboxed() {
     -v "$UNIT_DIR:$UNIT_DIR" \
     -v "$UNIT_DIR/claude-config:/loop-config" \
     -v "$PLUGIN_ROOT:$PLUGIN_ROOT:ro" \
-    ${SUPERPOWERS_DIR:+-v "$SUPERPOWERS_DIR:$SUPERPOWERS_DIR:ro"} \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -w "$wt" \
     -e CLAUDE_CODE_OAUTH_TOKEN -e ANTHROPIC_API_KEY -e GH_TOKEN \
@@ -1627,7 +1622,6 @@ run_claude_sandboxed() {
       -p "$prompt" \
       --model "$model" \
       --plugin-dir "$PLUGIN_ROOT" \
-      ${SUPERPOWERS_DIR:+--plugin-dir "$SUPERPOWERS_DIR"} \
       ${SESSION_ID:+--session-id "$SESSION_ID"} \
       ${RESUME_ID:+--resume "$RESUME_ID"} \
       --output-format json \

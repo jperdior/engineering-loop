@@ -28,11 +28,12 @@ BASE="${1:-origin/main}"
 With a base that reaches back past this unit, the skill sees directories this unit never touched
 and rewrites their docs on this branch. It runs once per phase, so the effect compounds.
 
-## Superpowers Integration
+## Method
 
-Invoke before starting this workflow:
-- `superpowers:verification-before-completion` — after updating each doc, re-read the changed
-  sections against the code and confirm every statement is accurate before committing.
+- **Verify before committing.** After updating each doc, re-read every changed sentence against the
+  code it describes — open the file, find the symbol, confirm the claim. A statement you did not
+  check against the tree is a statement from memory, and this skill reads from code, never from
+  memory.
 
 **Run this before `/open-pr`.** Every doc change on the branch must be committed before the PR
 opens.

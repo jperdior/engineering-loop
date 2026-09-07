@@ -18,11 +18,26 @@ declares.
 The engine has no opinion about architecture. It has an opinion about *shape*: one ledger line, one
 phase checklist, each phase buildable by one fresh session.
 
-## Superpowers Integration
+## Method
 
-Invoke before starting this workflow:
-- `superpowers:brainstorming` — design first, code never until approved; collaborative dialogue to validate the approach and produce a design doc before writing the spec.
-- `superpowers:writing-plans` — after the spec is finalised, structure it into a concrete implementation plan with bite-sized tasks.
+Where this skill needs a way of working, it takes, in order: the skill the host's root `AGENTS.md` /
+`CLAUDE.md` routes that job to; else a skill in your own skill list that does it, whichever plugin
+provides it; else the steps written here. Nothing outside this plugin is required.
+
+**The lookup covers the way of working, never the spec itself.** The spec is always written by this
+skill, whatever spec skill the host has: the loop reads a grammar only this skill writes — the
+`## Delivery` line, the `## Progress` checklist, the `## Gates` block, each phase's `Skills:` line —
+and `<loop>/parse-ledger.sh` refuses a spec without it before a single session starts. A host spec
+skill is read as **input**: where its specs live, which catalogue of rules they cite, what sections
+the host expects. Its conventions go into this spec; its template does not replace this one.
+
+- **Design first, write never until agreed.** Before the spec, a design conversation: the decisions
+  with more than one defensible answer, asked in one batch with a recommendation each, closed by a
+  summary the user confirms. `/ship` runs it as its interview; run alone, this skill runs it at
+  step 3.
+- **There is no separate plan.** Each `### Phase N` section is the brief its session builds from,
+  so it names the files, the tests and the skills; a phase that would need a plan of its own is two
+  phases.
 
 For research-heavy specs (a new module, a cross-cutting concern), spawn an Explore agent before
 step 6 to benchmark the design against the patterns the host repository already uses — return a gap
