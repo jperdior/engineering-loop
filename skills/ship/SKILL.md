@@ -10,6 +10,10 @@ description: "Take a feature from a sentence to a merged PR — interview, spec,
 > loads; installed, that is under `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/cache/`. `<state>` is
 > `~/.local/state/engineering-loop/<repo>/`, the loop's state for this repository; `--dry-run`
 > prints the exact path. Nothing of either lives in the repository.
+>
+> **Names.** The engine's skills are invoked by their namespaced name, `/engineering-loop:<name>`
+> (`/engineering-loop:spec-writing`, `/engineering-loop:new-feature`, …). A bare `/<name>` in this
+> text means that one, never a host skill that happens to share the name.
 
 The front door. One command from *"I want X"* to a merged PR, with the human as an
 approval gate at exactly two points and everything between automated.
@@ -94,7 +98,15 @@ common case, not the exception.
    work, state in the ledger, and mention in your Phase A report. It is not a menu.
 2. **Worktree.** `/new-feature feat-<slug>`. This is the branch the loop builds
    on and the tree it builds in — no suffix, and no second worktree later.
-3. **Draft.** `/spec-writing`. Three things the loop reads: the `## Delivery`
+3. **Draft.** `/engineering-loop:spec-writing`, **always the engine's**, even when the host has
+   a spec skill of its own. The loop reads a grammar only this one writes: the `## Delivery`
+   ledger line, the `## Progress` checklist, the `## Gates` block, each phase's `Skills:` line.
+   When the host's `AGENTS.md` routes spec writing to a skill of its own, read that skill first
+   and honour what it says about the host — where specs live, which catalogue of rules to cite,
+   what sections the host expects — as input to ours; then say in the Phase A report which
+   skill wrote the spec and why. A host spec skill never replaces this step.
+
+   Three things the loop reads: the `## Delivery`
    ledger — **one unit**, whose backticked branch must be **this** branch; the
    phase checklist under `## Progress`, which is what the loop hands to each
    session and checks when it exits; and the `## Gates` section, the host's own
@@ -163,12 +175,16 @@ bounds a session is the phase it is given.
 
    Then watch the log two ways at once: a monitor on the file, **and** a timer that reads
    its last line every few minutes — a monitor alone went quiet in the middle of a run and
-   the final result was never reported. Relay **only** these events, one sentence each:
-   a phase `ticked and pushed`, `paused:`, `ESCALATE`, the PR `open and waiting for
-   review`, and the final `delivery-loop: exit N`. Not the sessions starting, not the
-   gates running, not the closing steps: the user asked for a feature, not a narration.
-   A `delivery-loop: exit N` line, however it is noticed, always produces the report in
-   step 3.
+   the final result was never reported. **Filter on the loop's own lines only**: every event
+   worth relaying starts with `delivery-loop: `, so match `^delivery-loop: ` and nothing
+   else. The log also carries the sessions' and the gates' output, and a bare `error` or
+   `fail` pattern matches a passing test's name and wakes you for nothing — then costs a
+   turn narrating the filter change. Relay **only** these events, one sentence each: a
+   phase `ticked and pushed`, `paused:`, `ESCALATE`, the PR `open and waiting for review`,
+   and the final `delivery-loop: exit N`. Not the sessions starting, not the gates running,
+   not the closing steps, not your own monitoring: the user asked for a feature, not a
+   narration. A `delivery-loop: exit N` line, however it is noticed, always produces the
+   report in step 3.
 
    What the loop does meanwhile: one fresh `claude -p` per unticked phase in this
    worktree, on `LOOP_MODEL` (default `opus`). Each session implements its phase
@@ -184,8 +200,9 @@ bounds a session is the phase it is given.
 3. **Report and stop** when the exit line arrives. `exit 0`: the PR, what the
    loop verified, and — from `<state>/telemetry/<spec>/<unit>.md`, the same table the
    PR body carries under `## Sessions` — one row per session: turns, peak context
-   against `SESSION_CONTEXT_ALARM`, wall clock, model. Then wait; merging is the
-   user's gate. `exit 5` and `exit 4` are the two sections below.
+   against `SESSION_CONTEXT_ALARM`, wall clock, model. There is no cost figure, and
+   none is estimated: peak context is what says whether the phasing held. Then wait;
+   merging is the user's gate. `exit 5` and `exit 4` are the two sections below.
 
 **The gates are the spec's, and the spec's are the host's.** The `## Gates` section
 `/spec-writing` derived from the host's docs is what every session runs and what the

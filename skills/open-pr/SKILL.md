@@ -7,6 +7,8 @@ description: "Open a GitHub PR for the current branch with a templated body, lab
 
 > **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
 > (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
 
 Open a PR for the work already on the current branch (the branch must have commits ahead of the
 base).

@@ -7,6 +7,8 @@ description: "Tick the current branch's unit in a spec's Delivery ledger and mov
 
 > **Paths.** `<loop>` is the plugin's `loop/` directory, two levels above this skill's own directory
 > (`<this skill's base dir>/../../loop`); Claude Code prints the base directory when the skill loads.
+> **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
+> text means that one, never a host skill sharing the name.
 
 Decide whether the branch about to become a PR is the spec's **last** delivery unit, and archive the
 spec into `.ai/specs/implemented/` when — and only when — it is.
