@@ -107,7 +107,7 @@ wins.
 | Setting | Default | Meaning |
 |---|---|---|
 | `LOOP_MODEL` | `opus` | the model of every build session; the PR session runs on `sonnet` |
-| `LOOP_SANDBOX` | `0` | `1` runs each session in a container with no host credentials; needs `setup-loop.sh` for the two tokens and `sandbox/build.sh` for the image, both in the plugin's `loop/` |
+| `LOOP_SANDBOX` | none, required | `1` runs each session in a container with no host credentials; needs `setup-loop.sh` for the two tokens and `sandbox/build.sh` for the image, both in the plugin's `loop/`. `0` runs on this host as you; `setup-loop.sh --host` records it. The loop refuses to run until one is chosen, and `/ship` asks on first use |
 | `MAX_SESSIONS` | phases + 4 | sessions per run before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
 | `SESSION_CONTEXT_ALARM` | half the model window | context, in tokens, above which a phase is reported as cut too large; unset, half of the session model's context window |

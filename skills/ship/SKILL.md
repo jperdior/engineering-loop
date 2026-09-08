@@ -73,13 +73,31 @@ common case, not the exception.
      it, or run `<loop>/setup-loop.sh` in a terminal and paste one that has it.* Nothing else.
    - `jq`, and `timeout` or `gtimeout`, on PATH. Name the install line otherwise
      (`brew install coreutils jq` on macOS).
-   - When `~/.config/engineering-loop/loop.env` sets `LOOP_SANDBOX=1`, run `<loop>/setup-loop.sh --show`: it reports
-     which of the two tokens are set without printing a value. If either is missing, tell the user
-     to run `<loop>/setup-loop.sh` in their own terminal. Say what it will ask for, so they can
-     have both ready: the token `claude setup-token` prints (their own subscription, valid about a
-     year), and a fine-grained GitHub personal access token scoped to **this repository** with
-     *Contents: read and write* and *Pull requests: read and write*. The script explains each at
-     the prompt, reads them without echoing, and writes `~/.config/engineering-loop/loop.env` at 0600.
+   - **Where the sessions run is the user's decision, made once.** Run `<loop>/setup-loop.sh
+     --show`: it lists every key in `~/.config/engineering-loop/loop.env` as `set` or `EMPTY`
+     without printing a value. The loop refuses to start, dry run included, while `LOOP_SANDBOX`
+     is EMPTY or the file is absent, so settle it here rather than discover it in the plan.
+
+     If `LOOP_SANDBOX` is EMPTY or absent, **stop and ask** before anything else, as one question
+     with two options (`AskUserQuestion` where the tool exists, otherwise plain text and wait):
+
+     - **In a container (recommended).** Each session sees only the worktree and two tokens of its
+       own: the one `claude setup-token` prints, which also decides which Claude account the run
+       bills, and a fine-grained GitHub PAT scoped to this repository with *Contents: read and
+       write* and *Pull requests: read and write*. Both last about a year. Needs Docker.
+     - **On this host.** Each session runs as the user, with their ssh keys, their `gh` login,
+       and the Claude account this shell's `CLAUDE_CONFIG_DIR` is logged into. Name that account
+       in the option: `claude auth status` prints its `email` and `orgName`.
+
+     Container: tell the user to run `<loop>/setup-loop.sh` in their own terminal, say what it
+     asks for so they have both tokens ready, then wait. When they say it is done, run `--show`
+     again and stop while either token is EMPTY; then `<loop>/sandbox/build.sh` once if the image
+     is missing. Host: run `<loop>/setup-loop.sh --host` yourself; it records `LOOP_SANDBOX=0`
+     and asks nothing. Either way, say in one line which mode is recorded and which account will
+     be billed. The question never comes back: the file holds the answer for every later run.
+
+     If `LOOP_SANDBOX` is already `1`, stop only while either token is EMPTY, with the same
+     instruction to run the script.
 
    **Never ask for a token value in the chat**, and never accept one pasted there: a token in a
    message lands in the transcript. The script exists so the values never pass through a
@@ -155,13 +173,18 @@ bounds a session is the phase it is given.
    `main` has moved far enough to matter, `git rebase origin/main` in the worktree
    before the run.
 
-1. **Plan first, always.**
+1. **Plan first, always.** Phase B often runs days after Phase A, so re-check the mode
+   first: `<loop>/setup-loop.sh --show`. `LOOP_SANDBOX` EMPTY or absent means the choice
+   in Phase A step 0 was never recorded; ask it now, the same way. `LOOP_SANDBOX=1` with a
+   token EMPTY means the user has to run `<loop>/setup-loop.sh` before anything can start.
+   Then:
    ```sh
    <loop>/delivery-loop.sh .ai/specs/{file}.md --dry-run
    ```
    Show the user the plan: the unit, its branch, its phases with their ticks and
-   skills, the gates and where they came from, the models, the bounds. It creates
-   nothing and finishes in seconds, so it runs in the foreground.
+   skills, the gates and where they came from, the models, the bounds, and the
+   `sandbox:` line, which confirms the mode they chose. It creates nothing and
+   finishes in seconds, so it runs in the foreground.
 2. **Build, detached.** The run lasts longer than any tool call may, and it must
    outlive this chat session: a foreground command times out, and a plain
    background job is killed when the session ends or the machine is short of
