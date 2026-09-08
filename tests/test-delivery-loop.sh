@@ -312,7 +312,7 @@ telem="$(cat "$(statedir)/telemetry/fixture/PR-1.md" 2>/dev/null || true)"
 # shellcheck disable=SC2012
 if [ "$(printf '%s\n' "$telem" | grep -c '^| Phase ')" = 3 ] \
    && [ "$(printf '%s\n' "$telem" | grep -c '^| closing:')" = 3 ] \
-   && printf '%s' "$telem" | grep -q "peak context" \
+   && printf '%s' "$telem" | grep -q "| context |" \
    && printf '%s' "$telem" | grep -q "| PR | #" \
    && ! git -C "$REPO" ls-tree -r --name-only feat-one | grep -q 'telemetry'; then pass
 else fail "telemetry: $telem; state: $(find "$(statedir)" -maxdepth 1 | tr "\n" " ")"; fi
@@ -325,11 +325,25 @@ if [ -z "$(git -C "$REPO" status --porcelain)" ] \
    && grep -qx '.claude/worktrees/' "$REPO/.git/info/exclude"; then pass
 else fail "status: $(git -C "$REPO" status --porcelain | tr '\n' ' '); tree: $(git -C "$REPO" ls-tree -r --name-only feat-one | tr '\n' ' ')"; fi
 
-CASE="a session over the context alarm is reported, not stopped"
+# The stub's last recorded call is 9212 tokens on a model with a 1000000 window.
+CASE="a session over an explicit context alarm is reported, not stopped"
 fresh alarm
-if SESSION_CONTEXT_ALARM=5000 run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ] \
-   && grep -q "Phase 1: peak context 9212 exceeds SESSION_CONTEXT_ALARM=5000" "$TMP/err"; then pass
-else fail "$(grep -c SESSION_CONTEXT_ALARM "$TMP/err") alarm lines: $(tail -2 "$TMP/err")"; fi
+telem="$(SESSION_CONTEXT_ALARM=5000 run_loop && cat "$(statedir)/telemetry/fixture/PR-1.md" 2>/dev/null)"
+if [ "$(ticks 'PR 1' feat-one)" = 1 ] \
+   && grep -q "Phase 1: context 9212 exceeds SESSION_CONTEXT_ALARM=5000" "$TMP/err" \
+   && printf '%s' "$telem" | grep -q '^| context alarm | 5000 |' \
+   && printf '%s' "$telem" | grep -q '^| Phase 1 | 43 | 9212 ⚠ | '; then pass
+else fail "$(grep -c SESSION_CONTEXT_ALARM "$TMP/err") alarm lines: $(tail -2 "$TMP/err"); $(printf '%s' "$telem" | grep '^| Phase 1')"; fi
+
+# Unset, the alarm is half the model's window, read from the session's own result: a fixed token
+# default tuned to one model fires on every phase of a host with a large docs tree on a larger one.
+CASE="with no alarm set, the alarm is half the model window"
+fresh alarmhalf
+telem="$(run_loop && cat "$(statedir)/telemetry/fixture/PR-1.md" 2>/dev/null)"
+if ! grep -qE "exceeds" "$TMP/err" \
+   && printf '%s' "$telem" | grep -q "^| context alarm | half the model window |" \
+   && printf '%s' "$telem" | grep -q '^| Phase 1 | 43 | 9212 | '; then pass
+else fail "alarm lines: $(grep -c exceeds "$TMP/err"); $(printf '%s' "$telem" | grep -E 'alarm|^\| Phase 1')"; fi
 
 # A session cannot see its context, so telling it a budget is an instruction with nothing to
 # measure against. The prompt names the phase and nothing else.
@@ -453,7 +467,34 @@ escalates() {
   fi
 }
 
-escalates "a silent session escalates"                   LOOP_TEST_CLAUDE=silent
+# A CLEAN EXIT WITH NO SENTINEL IS RESUMED ONCE. The session ended its turn early -- it asked, or it
+# backgrounded its gates and waited for a next turn a headless session never gets. Its record names
+# the conversation and its work is in the worktree: the state a re-run continues, so the loop
+# continues it itself. A session that does it twice is escalated, and the escalation says so.
+CASE="a clean exit with no sentinel is resumed once, and the resumed session finishes the unit"
+fresh silentonce
+if LOOP_TEST_CLAUDE=silent-once run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ] \
+   && [ "$(wc -l < "$LOOP_TEST_DIR/resumes.txt" | tr -d ' ')" = 1 ] \
+   && grep -q "Phase 1 exited clean with no sentinel; resuming that conversation once" "$TMP/out" \
+   && grep -q "session 1 continues the interrupted Phase 1" "$TMP/out"; then pass
+else fail "ticks=$(ticks 'PR 1' feat-one) resumes=$(wc -l < "$LOOP_TEST_DIR/resumes.txt") $(tail -3 "$TMP/err")"; fi
+
+CASE="the resume of a silent session does not count against MAX_SESSIONS"
+fresh silentbound
+if LOOP_TEST_CLAUDE=silent-once MAX_SESSIONS=6 run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
+else fail "$(tail -2 "$TMP/err")"; fi
+
+CASE="a session silent twice escalates, after exactly one resume"
+fresh silenttwice
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=silent; run_loop ); rc=$?
+set -e
+if [ "$rc" = 4 ] && [ "$(wc -l < "$LOOP_TEST_DIR/resumes.txt" | tr -d ' ')" = 1 ] \
+   && grep -q "Phase 1 exited clean with no sentinel twice" "$TMP/err" \
+   && [ ! -f "$(statedir)/telemetry/fixture/PR-1.md" ]; then pass
+else fail "exit $rc resumes=$(wc -l < "$LOOP_TEST_DIR/resumes.txt") $(tail -2 "$TMP/err")"; fi
+
 escalates "an ESCALATE sentinel escalates"               LOOP_TEST_CLAUDE=escalate
 escalates "a permission denial escalates"                LOOP_TEST_CLAUDE=denied
 escalates "denials are named even with no sentinel"      LOOP_TEST_CLAUDE=denied-silent
@@ -794,9 +835,13 @@ set +e
 set -e
 kept_id="$(rec_field session_id)"
 kept_tip="$(rec_field origin_tip)"
-if [ "$rc" = 4 ] && [ -n "$kept_id" ] && run_loop && [ "$(resumed)" = "$kept_id" ] \
+# The first run already resumed that conversation once itself before escalating, so the re-run's
+# resume is the second line of resumes.txt, naming the same conversation.
+if [ "$rc" = 4 ] && [ -n "$kept_id" ] && run_loop \
+   && [ "$(wc -l < "$LOOP_TEST_DIR/resumes.txt" | tr -d ' ')" = 2 ] \
+   && [ "$(tail -1 "$LOOP_TEST_DIR/resumes.txt")" = "$kept_id" ] \
    && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
-else fail "exit $rc, resumed '$(resumed)' want '$kept_id': $(tail -2 "$TMP/err")"; fi
+else fail "exit $rc, resumed '$(tail -1 "$LOOP_TEST_DIR/resumes.txt")' want '$kept_id': $(tail -2 "$TMP/err")"; fi
 
 # Reads the run above. That session was interrupted before its first push, so the branch was not on
 # origin at all and the recorded tip is empty -- and a decision that asked origin about it anyway
@@ -1389,7 +1434,7 @@ if run_loop --dry-run && grep -q "sandbox: ON" "$TMP/out"; then pass
 else fail "$(tail -2 "$TMP/out")"; fi
 
 CASE="the bounds line reports the sessions, the timeout and the alarm"
-if grep -qE "MAX_SESSIONS=[0-9]+ UNIT_TIMEOUT=[0-9]+s SESSION_CONTEXT_ALARM=[0-9]+" "$TMP/out"; then pass
+if grep -qE "MAX_SESSIONS=[0-9]+ UNIT_TIMEOUT=[0-9]+s SESSION_CONTEXT_ALARM=half-window" "$TMP/out"; then pass
 else fail "$(grep bounds "$TMP/out")"; fi
 
 # --------------------------------------------------------------------------- the host contract

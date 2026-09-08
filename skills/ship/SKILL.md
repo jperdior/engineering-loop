@@ -202,9 +202,9 @@ bounds a session is the phase it is given.
    the PR number.
 3. **Report and stop** when the exit line arrives. `exit 0`: the PR, what the
    loop verified, and — from `<state>/telemetry/<spec>/<unit>.md`, the same table the
-   PR body carries under `## Sessions` — one row per session: turns, peak context
-   against `SESSION_CONTEXT_ALARM`, wall clock, model. There is no cost figure, and
-   none is estimated: peak context is what says whether the phasing held. Then wait;
+   PR body carries under `## Sessions` — one row per session: turns, context against
+   the alarm, wall clock, model. There is no cost figure, and none is estimated:
+   context is what says whether the phasing held. Then wait;
    merging is the user's gate. `exit 5` and `exit 4` are the two sections below.
 
 **The gates are the spec's, and the spec's are the host's.** The `## Gates` section
@@ -223,9 +223,13 @@ place, that worktree is the user's own and is never reclaimed by anything; delet
 not yours. `--dry-run` prints the decision as a `resume:` line and changes nothing,
 so it is safe to run first.
 
-**Read the telemetry, every time.** A session's peak context is the only evidence
-that its phase was cut to a size one session can hold. A row over the alarm means
-the phase was too large; the fix is in the spec's phasing, not in the session.
+**Read the telemetry, every time.** A session's context — the window it held at its
+last call — is the only evidence that its phase was cut to a size one session can
+hold. The alarm is half the model's window unless `SESSION_CONTEXT_ALARM` names a
+token count. A row over it means the phase was too large; the fix is in the spec's
+phasing, not in the session. Much of every row is what a session carries before it
+does anything — the host's docs and the prompt — so read rows against each other, not
+against zero.
 `SESSION_CONTEXT_ALARM` is a reading on the telemetry, never something a session
 is told — a session cannot observe its own context.
 
@@ -251,7 +255,7 @@ to that work.
 
 | Sentinel / signal | What actually happened |
 |---|---|
-| no sentinel written | the session stopped to ask something, and exited 0 doing it |
+| no sentinel written, twice | the session ended its turn early — asked something, or backgrounded its gates and waited for a next turn it never gets. The loop resumed that conversation once; it ended the same way |
 | `ESCALATE:<reason>` | the session knew it was blocked and said so |
 | `permission_denials` non-empty | a tool was denied; it reports as success everywhere else |
 | `is_error: true` | a hard API error, reported alongside `subtype: "success"` |

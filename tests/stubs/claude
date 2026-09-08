@@ -13,7 +13,9 @@
 # LOOP_TEST_CLAUDE selects the outcome:
 #
 #   ok             (default) the session does its job
-#   silent         exit 0 having written nothing                              (stopped to ask)
+#   silent         exit 0 having written nothing, every time                  (stopped to ask)
+#   silent-once    exit 0 having written nothing ONCE per run; the resumed launch does its job
+#                  (backgrounded its gates and ended its turn; given the turn back, it finishes)
 #   escalate       write ESCALATE:<reason>
 #   denied         do the job, report a permission denial
 #   denied-silent  write NOTHING, report a permission denial                  (Write was denied)
@@ -109,6 +111,13 @@ case "$mode" in
   silent)
     echo '{"is_error":false,"subtype":"success","permission_denials":[],"total_cost_usd":0.20}'
     exit 0
+    ;;
+  silent-once)
+    if [ ! -f "$LOOP_TEST_DIR/silent-once-done" ]; then
+      : > "$LOOP_TEST_DIR/silent-once-done"
+      echo '{"is_error":false,"subtype":"success","permission_denials":[],"total_cost_usd":0.20}'
+      exit 0
+    fi
     ;;
   escalate)
     echo "ESCALATE:the spec contradicts itself" > "$status_file"

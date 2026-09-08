@@ -24,7 +24,8 @@
 #   LOOP_MODEL=opus                   the model of every build session; the PR session runs on sonnet.
 #   MAX_SESSIONS=<phases>+4           sessions per invocation before the unit is declared non-converging.
 #   UNIT_TIMEOUT=7200                 seconds per session, enforced by timeout(1).
-#   SESSION_CONTEXT_ALARM=150000      a session whose peak context exceeds this is reported, not stopped.
+#   SESSION_CONTEXT_ALARM=<tokens>    a session whose context exceeds this is reported, not stopped. Unset,
+#                                     the alarm is half of the session's model context window.
 #
 # There is no budget: the unit is built until it is done. A session refused for the account's usage
 # limit pauses the run (exit 5) instead of escalating; re-running the same command continues the
@@ -169,7 +170,7 @@ LOOP_SIZE_EXCLUDES="${LOOP_SIZE_EXCLUDES:-}"
 LOOP_DENIALS_EXTRA="${LOOP_DENIALS_EXTRA:-}"
 LOOP_MODEL="${LOOP_MODEL:-opus}"
 PR_MODEL="sonnet"
-SESSION_CONTEXT_ALARM="${SESSION_CONTEXT_ALARM:-150000}"
+SESSION_CONTEXT_ALARM="${SESSION_CONTEXT_ALARM:-}"
 MAX_SESSIONS="${MAX_SESSIONS:-}"
 
 UNIT_TIMEOUT="${UNIT_TIMEOUT:-7200}"
@@ -1630,18 +1631,46 @@ run_claude_sandboxed() {
   return "$rc"
 }
 
-# Peak context is the largest single turn's input: cache reads plus cache creation plus fresh input.
-# The max rather than the last turn keeps this true across a compaction.
-peak_context() {
-  jq -r '([.usage.iterations[]? | (.cache_read_input_tokens//0) + (.cache_creation_input_tokens//0) + (.input_tokens//0)] | max) // 0' "$1" 2>/dev/null || echo 0
+# A session's context is the input of its last recorded API call: cache reads plus cache creation
+# plus fresh input. The result's `usage.iterations` holds one entry, that call; the max is taken in
+# case a CLI ever records more. It is the window the model actually held at the end, which is what
+# says whether a phase fits in one session.
+#
+# The alarm compares it to half the model's context window unless the user set a token count. A
+# fixed default fires on every phase of a host with a large docs tree on a large-window model: a
+# five-turn session on such a host held 224k before it had done anything, and 150k said "phase too
+# large" about every phase of a unit whose phases were fine. Half the window is host-independent, and
+# a phase that fills half of it is too large whatever the host. Unset in loop.env means "half".
+CONTEXT_TOTAL_JQ='(.cache_read_input_tokens//0) + (.cache_creation_input_tokens//0) + (.input_tokens//0)'
+
+session_context() {
+  jq -r "([.usage.iterations[]? | $CONTEXT_TOTAL_JQ] | max) // 0" "$1" 2>/dev/null || echo 0
+}
+
+# The largest window among the models the session used: the build model's, the one the main
+# conversation ran on. Subagents on a smaller model show up beside it and must not shrink the alarm.
+context_alarm_for() {
+  local json_file="$1" window
+  if [ -n "$SESSION_CONTEXT_ALARM" ]; then
+    printf '%s' "$SESSION_CONTEXT_ALARM"
+    return
+  fi
+  window="$(jq -r '([.modelUsage[]?.contextWindow // 0] | max) // 0' "$json_file" 2>/dev/null || echo 0)"
+  printf '%s' "$(( ${window:-0} / 2 ))"
 }
 
 context_alarm() {
-  local json_file="$1" label="$2" peak
+  local json_file="$1" label="$2" context alarm
   [ -s "$json_file" ] || return 0
-  peak="$(peak_context "$json_file")"
-  if [ "$peak" -gt "$SESSION_CONTEXT_ALARM" ] 2>/dev/null; then
-    warn "$label: peak context $peak exceeds SESSION_CONTEXT_ALARM=$SESSION_CONTEXT_ALARM -- this phase is cut too large"
+  context="$(session_context "$json_file")"
+  alarm="$(context_alarm_for "$json_file")"
+  [ "${alarm:-0}" -gt 0 ] 2>/dev/null || return 0
+  if [ "$context" -gt "$alarm" ] 2>/dev/null; then
+    if [ -n "$SESSION_CONTEXT_ALARM" ]; then
+      warn "$label: context $context exceeds SESSION_CONTEXT_ALARM=$alarm -- this phase is cut too large"
+    else
+      warn "$label: context $context exceeds half the model window ($alarm) -- this phase is cut too large"
+    fi
   fi
 }
 
@@ -1742,7 +1771,8 @@ hit_usage_limit() {
 # a signal, a kill, a timeout, a denied `Write` -- and its half-built work is in the worktree with
 # nothing but the record to name it, so the record stays. `is_error` counts as interrupted.
 #
-# Returns 0 for a verified OK, 2 for a verified CONTINUE, 3 for a usage-limit pause, 1 otherwise.
+# Returns 0 for a verified OK, 2 for a verified CONTINUE, 3 for a usage-limit pause, 4 for a clean
+# exit that wrote no sentinel while its record still stands (the caller resumes it once), 1 otherwise.
 verify_session() {
   local kind="$1" name="$2" json_file="$3"
   local status_file="$UNIT_DIR/status"
@@ -1763,7 +1793,15 @@ verify_session() {
     return 1
   fi
 
+  # A clean exit with no sentinel is a session that ended its turn early -- it asked a question, or
+  # backgrounded its gates and waited for a next turn a headless session does not have. Its work is
+  # in the worktree and its record names its conversation; that is exactly the state a re-run
+  # resumes, so the loop resumes it itself, once. A kill leaves no JSON and is not this case.
   if [ ! -f "$status_file" ]; then
+    if [ -s "$json_file" ] && [ -f "$UNIT_DIR/session" ] \
+       && [ "$(jq -r '.is_error // false' "$json_file" 2>/dev/null)" != "true" ]; then
+      return 4
+    fi
     escalate "$UNIT" "no sentinel was written; treating as an escalation"
     return 1
   fi
@@ -1926,7 +1964,7 @@ telemetry_file() {
 }
 
 # What a unit cost to build, one row per session. Context is what a session costs, and recording
-# each session's peak beside the alarm is what shows which phase was cut too large.
+# each session's context beside the alarm is what shows which phase was cut too large.
 record_telemetry() {
   local pr_number="$1" measured="$2"
   local file json rows=""
@@ -1939,12 +1977,12 @@ record_telemetry() {
     [ -s "$json" ] || continue
     # A session refused before it started built nothing and has no row.
     [ "$(jq -r '.is_error // false' "$json" 2>/dev/null)" != "true" ] || continue
-    rows="$rows$(jq -r --arg alarm "$SESSION_CONTEXT_ALARM" '
-      ([.usage.iterations[]? | (.cache_read_input_tokens//0) + (.cache_creation_input_tokens//0) + (.input_tokens//0)] | max) as $peak |
-      "| " + (.loop_phase // "closing") + " | " + (.num_turns|tostring)
-        + " | " + (($peak // 0)|tostring) + (if ($peak // 0) > ($alarm|tonumber) then " ⚠" else "" end)
-        + " | " + ((.duration_ms/60000|round)|tostring) + " min | " + ((.modelUsage | keys | join(", ")) // "?") + " |"
-    ' "$json" 2>/dev/null || true)
+    rows="$rows$(jq -r --arg alarm "$(context_alarm_for "$json")" "
+      (([.usage.iterations[]? | $CONTEXT_TOTAL_JQ] | max) // 0) as \$context
+      | \"| \" + (.loop_phase // \"closing\") + \" | \" + (.num_turns|tostring)
+        + \" | \" + (\$context|tostring) + (if (\$alarm|tonumber) > 0 and \$context > (\$alarm|tonumber) then \" ⚠\" else \"\" end)
+        + \" | \" + ((.duration_ms/60000|round)|tostring) + \" min | \" + ((.modelUsage | keys | join(\", \")) // \"?\") + \" |\"
+    " "$json" 2>/dev/null || true)
 "
   done
 
@@ -1957,10 +1995,10 @@ record_telemetry() {
     # show an empty cell. unit_is_recorded reads the row's presence as "the PR is recorded".
     [ -z "$pr_number" ] || printf '| PR | #%s |\n' "$pr_number"
     printf '| size | %s |\n' "$measured"
-    printf '| context alarm | %s |\n\n' "$SESSION_CONTEXT_ALARM"
-    # No cost column: peak context is the number that says whether the phasing held, and a notional
+    printf '| context alarm | %s |\n\n' "${SESSION_CONTEXT_ALARM:-half the model window}"
+    # No cost column: context is the number that says whether the phasing held, and a notional
     # API-equivalent beside it is read as a bill nobody pays.
-    printf '| session | turns | peak context | wall clock | model |\n|---|---|---|---|---|\n'
+    printf '| session | turns | context | wall clock | model |\n|---|---|---|---|---|\n'
     printf '%s' "$rows"
   } > "$file"
 }
@@ -2051,7 +2089,7 @@ if [ "$DRY_RUN" = 1 ]; then
   log "spec: $SPEC"
   # LOOP_SANDBOX is reported because a host run and a container run produce the same PR; left out,
   # a run believed sandboxed and one that was not would be indistinguishable.
-  log "bounds: MAX_SESSIONS=${MAX_SESSIONS:-—} UNIT_TIMEOUT=${UNIT_TIMEOUT}s SESSION_CONTEXT_ALARM=$SESSION_CONTEXT_ALARM"
+  log "bounds: MAX_SESSIONS=${MAX_SESSIONS:-—} UNIT_TIMEOUT=${UNIT_TIMEOUT}s SESSION_CONTEXT_ALARM=${SESSION_CONTEXT_ALARM:-half-window}"
   log "gates:  ${LOOP_GATES:-none} (${LOOP_GATES_FROM#"$ROOT"/})"
   [ -z "$LOOP_CLEAN_WORKTREE" ] || log "cleanup: $LOOP_CLEAN_WORKTREE, inside the worktree before it is removed"
   [ -z "$LOOP_SIZE_EXCLUDES" ]  || log "excludes: $LOOP_SIZE_EXCLUDES"
@@ -2137,6 +2175,9 @@ fi
 SESSIONS=0
 UNIT_OK=0
 STEP=""
+# The one phase or step whose silent exit has already been resumed. A second silent exit of the same
+# one is an escalation: the conversation was given its turn back and ended it the same way.
+SILENT_RESUMED=""
 while :; do
   if [ "$SESSIONS" -ge "$MAX_SESSIONS" ]; then
     escalate "$UNIT" "still not finished after $SESSIONS sessions (MAX_SESSIONS=$MAX_SESSIONS); it is not converging"
@@ -2226,6 +2267,21 @@ while :; do
       fi
       ;;
     3) PAUSED=1; break ;;
+    4)
+      if [ "$SILENT_RESUMED" != "$LABEL" ]; then
+        SILENT_RESUMED="$LABEL"
+        RESUME_ID="$(sed -n 's/^session_id=//p' "$UNIT_DIR/session" | head -1)"
+        if [ -n "$RESUME_ID" ]; then
+          # The continuation is the same session given its turn back, not a new attempt at the
+          # phase, so it does not count against MAX_SESSIONS and it takes the same session number.
+          SESSIONS=$((SESSIONS - 1))
+          log "$UNIT: $LABEL exited clean with no sentinel; resuming that conversation once"
+          continue
+        fi
+      fi
+      escalate "$UNIT" "$LABEL exited clean with no sentinel twice: resumed once, and ended its turn the same way"
+      break
+      ;;
     *) break ;;
   esac
 done
