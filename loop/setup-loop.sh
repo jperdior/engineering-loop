@@ -9,7 +9,11 @@
 #
 # Idempotent. Run it again to change one value and keep the rest.
 #
-# Usage: setup-loop.sh [--show]   --show prints what is configured, never the secrets.
+# Usage: setup-loop.sh [--show | --host]
+#   --show   prints what is configured, never the secrets.
+#   --host   records LOOP_SANDBOX=0 and asks nothing: sessions run on this machine as the user, with
+#            their ssh keys, gh login and the Claude account the shell is logged into. Needs no
+#            terminal, so /ship can call it once the user has chosen.
 #
 # Exit: 0 written, 2 usage, 3 refused.
 
@@ -21,37 +25,6 @@ LOOP_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 
 ENV_FILE="${LOOP_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env}"
 TEMPLATE="$LOOP_DIR/loop.env.dist"
-
-case "$MODE" in
-  setup|--setup) ;;
-  --show)
-    if [ ! -f "$ENV_FILE" ]; then
-      echo "Not configured ($ENV_FILE is absent). Run: $LOOP_DIR/setup-loop.sh"
-      exit 0
-    fi
-    echo "Configured in $ENV_FILE:"
-    # Names and whether each has a value -- never the value.
-    awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ {
-      printf "  %-28s %s\n", $1, (length($2) > 0 ? "set" : "EMPTY")
-    }' "$ENV_FILE"
-    exit 0
-    ;;
-  *) echo "usage: setup-loop.sh [--show]" >&2; exit 2 ;;
-esac
-
-if [ ! -t 0 ]; then
-  echo "setup-loop: this asks questions, so it needs a real terminal (a Claude Code '!' command is not one)." >&2
-  echo "Run it from a terminal, or copy $TEMPLATE to $ENV_FILE and set its GH_TOKEN= and CLAUDE_CODE_OAUTH_TOKEN= lines by hand." >&2
-  exit 3
-fi
-
-[ -f "$TEMPLATE" ] || { echo "setup-loop: $TEMPLATE is missing" >&2; exit 3; }
-mkdir -p "$(dirname "$ENV_FILE")"
-[ -f "$ENV_FILE" ] || cp "$TEMPLATE" "$ENV_FILE"
-chmod 600 "$ENV_FILE"
-
-# Read the value already stored, so a re-run can offer to keep it.
-current() { awk -F= -v k="$1" '$1 == k { print substr($0, length(k) + 2) }' "$ENV_FILE" | head -1; }
 
 # Rewrite one key in place. A here-doc rather than sed: a token can contain characters sed would
 # treat as delimiters, and a mangled credential fails somewhere far away from here.
@@ -65,6 +38,50 @@ put() {
   mv "$ENV_FILE.tmp" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
 }
+
+# The file is created from the template on first use, whichever mode gets there first.
+ensure_env_file() {
+  [ -f "$TEMPLATE" ] || { echo "setup-loop: $TEMPLATE is missing" >&2; exit 3; }
+  mkdir -p "$(dirname "$ENV_FILE")"
+  [ -f "$ENV_FILE" ] || cp "$TEMPLATE" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+}
+
+case "$MODE" in
+  setup|--setup) ;;
+  --host)
+    ensure_env_file
+    put LOOP_SANDBOX 0
+    echo "LOOP_SANDBOX=0 written to $ENV_FILE: sessions run on this host, as you, with your ssh keys,"
+    echo "gh login and the Claude account this shell is logged into. Run $LOOP_DIR/setup-loop.sh to switch"
+    echo "to a container later."
+    exit 0
+    ;;
+  --show)
+    if [ ! -f "$ENV_FILE" ]; then
+      echo "Not configured ($ENV_FILE is absent). Run: $LOOP_DIR/setup-loop.sh"
+      exit 0
+    fi
+    echo "Configured in $ENV_FILE:"
+    # Names and whether each has a value -- never the value.
+    awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ {
+      printf "  %-28s %s\n", $1, (length($2) > 0 ? "set" : "EMPTY")
+    }' "$ENV_FILE"
+    exit 0
+    ;;
+  *) echo "usage: setup-loop.sh [--show | --host]" >&2; exit 2 ;;
+esac
+
+if [ ! -t 0 ]; then
+  echo "setup-loop: this asks questions, so it needs a real terminal (a Claude Code '!' command is not one)." >&2
+  echo "Run it from a terminal, or copy $TEMPLATE to $ENV_FILE and set its GH_TOKEN= and CLAUDE_CODE_OAUTH_TOKEN= lines by hand." >&2
+  exit 3
+fi
+
+ensure_env_file
+
+# Read the value already stored, so a re-run can offer to keep it.
+current() { awk -F= -v k="$1" '$1 == k { print substr($0, length(k) + 2) }' "$ENV_FILE" | head -1; }
 
 # `read -s` so a token never lands in the terminal scrollback or the shell history.
 ask_secret() {

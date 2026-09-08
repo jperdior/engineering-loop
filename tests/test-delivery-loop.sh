@@ -149,9 +149,22 @@ fresh() {
   : > "$LOOP_TEST_DIR/make-targets.txt"
 }
 
+# The host-or-container switch is mandatory, so the fixture answers "host" unless a case sets it in
+# the shell (kept as is, an empty export included, which is how the refusal is exercised) or in the
+# settings file (passed through empty, so the file's value applies: the loop lets the file fill an
+# empty variable).
+loop_sandbox() {
+  if [ -n "${LOOP_SANDBOX+x}" ] || grep -q '^LOOP_SANDBOX=' "$LOOP_ENV" 2>/dev/null; then
+    printf '%s' "${LOOP_SANDBOX-}"
+  else
+    printf '0'
+  fi
+}
+
 run_loop() {
   ( cd "$REPO" \
     && PATH="$STUBS:$PATH" \
+       LOOP_SANDBOX="$(loop_sandbox)" \
        UNIT_TIMEOUT="${UNIT_TIMEOUT:-60}" \
        "$HARNESS_LOOP" "$SPEC_REL" "$@" ) >"$TMP/out" 2>"$TMP/err"
 }
@@ -163,6 +176,7 @@ run_loop_bg() {
   spec="$1"; tag="$2"; shift 2
   ( cd "$REPO" \
     && PATH="$STUBS:$PATH" \
+       LOOP_SANDBOX="$(loop_sandbox)" \
        UNIT_TIMEOUT="${UNIT_TIMEOUT:-60}" \
        "$HARNESS_LOOP" "$spec" "$@" ) >"$TMP/out.$tag" 2>"$TMP/err.$tag" &
   BG_PID=$!
@@ -189,6 +203,7 @@ fresh_worktree() {
 run_loop_wt() {
   ( cd "$WT" \
     && PATH="$STUBS:$PATH" \
+       LOOP_SANDBOX="$(loop_sandbox)" \
        UNIT_TIMEOUT="${UNIT_TIMEOUT:-60}" \
        "$HARNESS_LOOP" "$SPEC_REL" "$@" ) >"$TMP/out" 2>"$TMP/err"
 }
@@ -1047,7 +1062,7 @@ sleep 120 & sleeper=$!
 echo "$sleeper" > "$(lockdir)/feat-one/pid"
 set +e
 run_loop --dry-run >/dev/null 2>&1   # dry-run takes no lock
-( cd "$REPO" && PATH="$STUBS:$PATH" "$HARNESS_LOOP" "$SPEC_REL" ) >"$TMP/out" 2>"$TMP/err"; rc=$?
+( cd "$REPO" && PATH="$STUBS:$PATH" LOOP_SANDBOX=0 "$HARNESS_LOOP" "$SPEC_REL" ) >"$TMP/out" 2>"$TMP/err"; rc=$?
 set -e
 kill "$sleeper" 2>/dev/null || true
 # The PID is alive but is not a delivery loop: a recycled PID, which must NOT be trusted OR reclaimed.
@@ -1441,6 +1456,34 @@ CASE="--dry-run says whether the sandbox is on"
 fresh sandboxoff
 if run_loop --dry-run && grep -q "sandbox: OFF" "$TMP/out"; then pass
 else fail "$(grep -c sandbox "$TMP/out") sandbox lines"; fi
+
+# Running on the host is the less safe mode, so it is never the one you get by saying nothing: the
+# switch has to be 0 or 1, in the file or the shell, before anything runs -- the dry run included,
+# because the dry run is where /ship shows the plan.
+CASE="an unset LOOP_SANDBOX is refused, dry run included, naming both ways to set it"
+fresh sandboxunset
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_SANDBOX=; run_loop --dry-run ); rc=$?
+set -e
+if [ "$rc" = 3 ] && grep -q "LOOP_SANDBOX is not set in $LOOP_ENV" "$TMP/err" \
+   && grep -q "setup-loop.sh --host" "$TMP/err" && ! remote_has feat-one; then pass
+else fail "exit $rc: $(tail -3 "$TMP/err")"; fi
+
+CASE="a LOOP_SANDBOX that is neither 0 nor 1 is refused"
+fresh sandboxjunk
+printf 'LOOP_SANDBOX=yes\n' > "$LOOP_ENV"
+set +e
+run_loop --dry-run; rc=$?
+set -e
+if [ "$rc" = 3 ] && grep -q "neither 0 nor 1" "$TMP/err"; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
+
+CASE="LOOP_SANDBOX=0 recorded in the settings file is an answer"
+fresh sandboxhost
+printf 'LOOP_SANDBOX=0\n' > "$LOOP_ENV"
+if run_loop --dry-run && grep -q "sandbox: OFF" "$TMP/out"; then pass
+else fail "$(tail -2 "$TMP/err")"; fi
 
 CASE="--dry-run names the image when the sandbox is on"
 fresh sandboxon

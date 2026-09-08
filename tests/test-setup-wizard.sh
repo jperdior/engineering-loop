@@ -68,6 +68,25 @@ check "the file the wizard maintains is 0600" \
   "$(stat -c '%a' "$LOOP_ENV" 2>/dev/null \
      || stat -f '%Lp' "$LOOP_ENV")" "600"
 
+# --host is the answer /ship records when the user chooses to run on this machine: no terminal, no
+# questions, one key written, everything else kept.
+( "$WIZ" --host ) > "$TMP/out" 2>&1
+check "--host records LOOP_SANDBOX=0" "$(sed -n 's/^LOOP_SANDBOX=//p' "$LOOP_ENV")" "0"
+check "--host keeps the other keys" \
+  "$(awk -F= '$1 == "GH_TOKEN" { print substr($0, length("GH_TOKEN") + 2) }' "$LOOP_ENV")" "github_pat_abc==/+xyz"
+check "--host says where the sessions will run" "$(grep -c 'on this host' "$TMP/out")" "1"
+check "--host needs no terminal" "$( "$WIZ" --host < /dev/null > /dev/null 2>&1; echo $? )" "0"
+
+rm -f "$LOOP_ENV"
+( "$WIZ" --host ) > /dev/null 2>&1
+check "--host creates the file from the template when absent" \
+  "$(stat -c '%a' "$LOOP_ENV" 2>/dev/null || stat -f '%Lp' "$LOOP_ENV")" "600"
+check "and the template's tokens stay empty in it" \
+  "$(grep -cE '^(CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN)=.+' "$LOOP_ENV")" "0"
+
+check "the committed template leaves the sandbox switch unanswered" \
+  "$(grep -c '^LOOP_SANDBOX=$' loop/loop.env.dist)" "1"
+
 check "the committed template carries no value" \
   "$(grep -cE '^(CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN)=.+' loop/loop.env.dist)" "0"
 

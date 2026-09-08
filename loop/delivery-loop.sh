@@ -229,7 +229,10 @@ RESUME_REPORT=0
 CONTAINER_N=0
 
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
-LOOP_SANDBOX="${LOOP_SANDBOX:-0}"
+# No default. Running on the host, with the user's ssh keys, gh login and Claude account, is a
+# decision the user records once in loop.env; pre-flight refuses an unset switch rather than
+# choosing the less safe mode by omission.
+LOOP_SANDBOX="${LOOP_SANDBOX:-}"
 
 # The container has no plugins of its own, so a sandboxed session is handed this plugin through
 # `--plugin-dir`. It needs no other: every skill carries its own steps for what it would otherwise
@@ -533,6 +536,24 @@ preflight() {
     fi
     [ "$DRY_RUN" = 1 ] || missing=1
   fi
+
+  # The host-or-container choice has to have been made, by the user, before anything runs -- a dry
+  # run included, since the dry run is how /ship shows the plan and the plan names the mode.
+  case "$LOOP_SANDBOX" in
+    0|1) ;;
+    '')
+      warn "LOOP_SANDBOX is not set in $LOOP_ENV, so the loop does not know where to run sessions."
+      warn "Choose once:"
+      warn "  in a container with its own two tokens (recommended):   $LOOP_DIR/setup-loop.sh"
+      warn "  on this host, as you, with your ssh keys, gh login and"
+      warn "  the Claude account this shell is logged into:          $LOOP_DIR/setup-loop.sh --host"
+      missing=1
+      ;;
+    *)
+      warn "LOOP_SANDBOX=$LOOP_SANDBOX is neither 0 nor 1 (in $LOOP_ENV or the shell)."
+      missing=1
+      ;;
+  esac
 
   # A sandbox run that cannot authenticate or reach the daemon fails inside the container, where
   # the only evidence is a denied session. Refuse here, where the message is the reason. A dry run
