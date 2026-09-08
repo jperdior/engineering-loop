@@ -176,18 +176,40 @@ bounds a session is the phase it is given.
    and the pid beside it. Tell the user the log path and that the run survives closing
    this chat.
 
-   Then watch the log two ways at once: a monitor on the file, **and** a timer that reads
-   its last line every few minutes — a monitor alone went quiet in the middle of a run and
-   the final result was never reported. **Filter on the loop's own lines only**: every event
-   worth relaying starts with `delivery-loop: `, so match `^delivery-loop: ` and nothing
-   else. The log also carries the sessions' and the gates' output, and a bare `error` or
-   `fail` pattern matches a passing test's name and wakes you for nothing — then costs a
-   turn narrating the filter change. Relay **only** these events, one sentence each: a
-   phase `ticked and pushed`, `paused:`, `ESCALATE`, the PR `open and waiting for review`,
-   and the final `delivery-loop: exit N`. Not the sessions starting, not the gates running,
-   not the closing steps, not your own monitoring: the user asked for a feature, not a
-   narration. A `delivery-loop: exit N` line, however it is noticed, always produces the
-   report in step 3.
+   Tell the user how to see for themselves, once, at launch:
+   ```sh
+   tail -1 <log>          # the last line names the run's state; 'delivery-loop: exit N' ends it
+   ```
+
+   **Watch with a timer that exits, not with a process that waits.** A monitor on the
+   file and a `tail -F | grep` pipeline are both long-lived processes: the machine kills
+   them under memory pressure — two Opus sessions and two test stacks are enough — and
+   the run carries on with nobody watching. A session that waits on them alone waits
+   forever, and the user reads that as a hung feature. The primary signal is therefore
+   one background command that sleeps and then prints the last loop line:
+   ```sh
+   sleep 600; grep '^delivery-loop: ' <log> | tail -1
+   ```
+   run in the background so that its exit — after its sleep, or when something kills
+   it — wakes you. On every wake, read the line it printed, act on it as below, and
+   arm the same command again while the run is in flight. A monitor on the file may
+   run beside it; it is a bonus, never the thing you rely on. Ten minutes is the
+   cadence while building: a phase lasts twenty to forty, and a shorter sleep burns
+   turns narrating nothing.
+
+   **Match `^delivery-loop: ` and nothing else.** The log also carries the sessions'
+   and the gates' output, and a bare `error` or `fail` matches a passing test's name.
+   Relay **only** these events, one sentence each, and only when the line has changed
+   since you last spoke: a phase `ticked and pushed`; `paused:`; `ESCALATE`; the PR
+   `open and waiting for review`; `delivery-loop: exit N`. Not the sessions starting,
+   not the gates running, not the closing steps, not your own watching: the user asked
+   for a feature, not a narration. A line that has not changed is not an event — re-arm
+   the timer and say nothing. A `delivery-loop: exit N` line, however it is noticed,
+   always produces the report in step 3, within one turn of noticing it.
+
+   A log that has not changed for longer than `UNIT_TIMEOUT` (two hours by default)
+   is a dead run, not a slow one: check the pid in `<log>.pid` with `ps` before
+   saying anything else.
 
    What the loop does meanwhile: one fresh `claude -p` per unticked phase in this
    worktree, on `LOOP_MODEL` (default `opus`). Each session implements its phase
@@ -213,15 +235,26 @@ loop re-runs on the host; there is no default, and pre-flight refuses a spec wit
 one. `--dry-run` prints them with their source.
 
 **If the loop pauses (exit 5), the account's usage limit is reached.** Nothing is
-wrong with the unit. Say so, and when the user says to continue, re-run the same
-command: the loop **continues the refused session** — `claude --resume` on the id
-in `<state>/units/<branch>/session`, in the worktree that session left — rather
-than rebuilding its phase. A session commits once, at the end of its phase, so the
-refused one's work is uncommitted in that worktree and nowhere else. Built in
+wrong with the unit, and nothing at all happens until the limit resets — which is
+hours, and is the one wait the user must not mistake for a hang. So say two things,
+once: that the run is paused on the usage limit, and **when it resumes**. The reset
+time is in the refused session's own result: `jq -r .result <state>/<branch>.json`
+prints the CLI's message, `You've hit your … limit · resets 3:20am (UTC)`. Then keep
+the ten-minute timer running silently, and when the reset time has passed, re-run the
+launch yourself:
+```sh
+<loop>/launch.sh .ai/specs/{file}.md
+```
+The user's OK at gate 1 covers the whole build; a pause changes nothing about the
+unit, and asking for a second OK at four in the morning is what leaves a run idle
+until breakfast. Relaunching **continues the refused session** — `claude --resume`
+on the id in `<state>/units/<branch>/session`, in the worktree that session left —
+rather than rebuilding its phase. A session commits once, at the end of its phase, so
+the refused one's work is uncommitted in that worktree and nowhere else. Built in
 place, that worktree is the user's own and is never reclaimed by anything; deleting
 `units/<branch>/session` is what refuses the resume, and that is the user's call,
 not yours. `--dry-run` prints the decision as a `resume:` line and changes nothing,
-so it is safe to run first.
+so run it first and relay only a `resume:` line that is not the expected one.
 
 **Read the telemetry, every time.** A session's context — the window it held at its
 last call — is the only evidence that its phase was cut to a size one session can
@@ -276,6 +309,8 @@ to that work.
 - **Never** open a PR for the spec, and never put it on a branch of its own. It is
   the unit's first commit and ships in the unit's one PR.
 - **Never** skip the `--dry-run`.
+- **Never** wait on a monitor or a `tail -F` alone. The sleeping timer that exits is
+  what wakes you; a run reported late is a run the user believes is hung.
 - **Never** merge anything on the user's behalf. Both gates are theirs.
 - **Never** open a PR per phase. The phases are commits on one branch behind one PR.
 - **Never** retry an escalated unit without reading the persisted JSON first.
