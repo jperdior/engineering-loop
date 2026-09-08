@@ -302,7 +302,22 @@ CASE="exactly one PR is opened"
 if [ "$(grep -c '^feat-one|' "$LOOP_TEST_DIR/prs.txt")" = 1 ]; then pass
 else fail "$(grep -c '^feat-one|' "$LOOP_TEST_DIR/prs.txt") PRs opened"; fi
 
-# Peak context per session is the only evidence that a phase is cut to a size a session can hold.
+# MAIN MOVED UNDER THE BUILD. The unit is built, green and recorded, and GitHub says the PR cannot
+# merge. That is said in the log the run ends with, and the run is still a success: the fix is the
+# human's merge of origin/main, not a rebuild.
+CASE="a PR that conflicts with main is named in the log, and the unit still counts as built"
+fresh conflict
+if LOOP_TEST_GH=conflict run_loop \
+   && grep -q 'PR #[0-9]* conflicts with main; merge origin/main into feat-one, resolve, run the gates and push' "$TMP/out" \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ] && [ -f "$(statedir)/telemetry/fixture/PR-1.md" ]; then pass
+else fail "$(grep -c 'conflicts with main' "$TMP/out") lines; $(tail -2 "$TMP/err")"; fi
+
+CASE="a PR that merges cleanly is not said to conflict"
+if ! grep -q 'conflicts with main' "$TMP/out.prev" 2>/dev/null && fresh cleanpr && run_loop \
+   && ! grep -q 'conflicts with main' "$TMP/out"; then pass
+else fail "$(grep 'conflicts with main' "$TMP/out")"; fi
+
+# Context per session is the only evidence that a phase is cut to a size a session can hold.
 CASE="telemetry has one row per session"
 fresh telem
 run_loop

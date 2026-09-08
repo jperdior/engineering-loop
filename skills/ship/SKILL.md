@@ -229,6 +229,15 @@ bounds a session is the phase it is given.
    context is what says whether the phasing held. Then wait;
    merging is the user's gate. `exit 5` and `exit 4` are the two sections below.
 
+   **If the log says the PR conflicts with main**, main moved under the build, which
+   is ordinary for a run of hours. Resolve it yourself, in the worktree, and say what
+   you resolved: `git merge origin/main` — a merge, not a rebase, because it needs no
+   force-push and so no permission — then each conflicted file by judgement, never
+   `--ours` or `--theirs`: a rule or a paragraph that main moved to another file goes
+   where that file now is. Then the spec's gates, then a plain push. Name every file
+   that conflicted, and if any of them is code rather than docs, say that the review
+   did not see the result and offer `/code-review` on the merge before the user merges.
+
 **The gates are the spec's, and the spec's are the host's.** The `## Gates` section
 `/spec-writing` derived from the host's docs is what every session runs and what the
 loop re-runs on the host; there is no default, and pre-flight refuses a spec without
@@ -311,6 +320,8 @@ to that work.
 - **Never** skip the `--dry-run`.
 - **Never** wait on a monitor or a `tail -F` alone. The sleeping timer that exits is
   what wakes you; a run reported late is a run the user believes is hung.
+- **Never** resolve a conflict with `--ours`/`--theirs`, and never rebase and force-push
+  a unit's branch: merge `origin/main` into it, so the history the review saw stands.
 - **Never** merge anything on the user's behalf. Both gates are theirs.
 - **Never** open a PR per phase. The phases are commits on one branch behind one PR.
 - **Never** retry an escalated unit without reading the persisted JSON first.

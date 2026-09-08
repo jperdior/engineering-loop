@@ -1139,6 +1139,12 @@ probe_unit_head() {
 # downgrades MERGED to NONE; anything uncertain leaves MERGED standing, because escalating a live
 # unit is recoverable and rebuilding one is not. Reachability rather than `origin/main..` because
 # squash-merges leave a merged unit's commits absent from main too.
+# GitHub's own verdict on whether the PR can merge. DIRTY is a conflict with main; anything the
+# read cannot answer is UNKNOWN, which is not a finding.
+pr_merge_state() {
+  gh pr view "$1" --json mergeStateStatus --jq .mergeStateStatus 2>/dev/null || echo UNKNOWN
+}
+
 probe_run() {
   local branch="$1" state merged_head
   state="$(probe_unit "$branch")"
@@ -2174,6 +2180,7 @@ fi
 # archive step says OK.
 SESSIONS=0
 UNIT_OK=0
+PR_CONFLICTS=0
 STEP=""
 # The one phase or step whose silent exit has already been resumed. A second silent exit of the same
 # one is an escalation: the conversation was given its turn back and ended it the same way.
@@ -2320,6 +2327,15 @@ PR body under a '## Sessions' heading, as it is." \
   # know the unit is delivered, so it is written even when the PR step escalated.
   record_unit "$PR_NUMBER" || true
 
+  # A unit built and green can still be unable to merge: main moved under a long build. Said in the
+  # log the run ends with rather than discovered in the GitHub UI. The fix is a human's -- merge
+  # origin/main into the branch, resolve with judgement, run the gates, push -- because it is a
+  # decision over conflicts no session saw, and a merge needs no force-push where a rebase would.
+  if [ -n "${PR_NUMBER:-}" ] && [ "$(pr_merge_state "$PR_NUMBER")" = "DIRTY" ]; then
+    PR_CONFLICTS=1
+    log "$UNIT: PR #$PR_NUMBER conflicts with main; merge origin/main into $BRANCH, resolve, run the gates and push before merging"
+  fi
+
   # The only reclaim. The unit is proved, its PR is open and its tick is recorded, so nothing in the
   # worktree is owed to anyone. Every other way out of this script keeps it: that is the difference
   # between a run that finished and a run that stopped.
@@ -2349,5 +2365,5 @@ if [ "$PAUSED" = 1 ]; then
   exit 5
 fi
 [ "$ESCALATED" = 0 ] || exit 4
-[ "$UNIT_OK" = 0 ] || attention "delivery-loop: $UNIT built, PR #${PR_NUMBER:-?} open and waiting for review"
+[ "$UNIT_OK" = 0 ] || attention "delivery-loop: $UNIT built, PR #${PR_NUMBER:-?} open and waiting for review$([ "$PR_CONFLICTS" = 1 ] && printf '; it conflicts with main')"
 exit 0
