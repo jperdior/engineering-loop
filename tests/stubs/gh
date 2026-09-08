@@ -11,6 +11,8 @@
 # LOOP_TEST_GH=fail makes every call exit non-zero, which is how the "a transient gh failure must
 # never be read as 'no PR'" case is exercised. LOOP_TEST_GH=norepo fails only `gh api repos/…`:
 # an authenticated token that cannot see this repository, which pre-flight must refuse.
+# LOOP_TEST_GH=conflict answers `pr view --json mergeStateStatus` with DIRTY: a PR that is open and
+# green and cannot merge because main moved under the build.
 
 set -euo pipefail
 
@@ -28,6 +30,16 @@ esac
 # Only the PR reads fail, so pre-flight still passes and the failure lands where the loop has to
 # decide what a missing answer means.
 [ "${LOOP_TEST_GH:-ok}" = "fail" ] && exit 1
+
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
+  state=CLEAN
+  [ "${LOOP_TEST_GH:-ok}" = conflict ] && state=DIRTY
+  case " $* " in
+    *" --jq "*) echo "$state" ;;
+    *)          printf '{"mergeStateStatus":"%s"}\n' "$state" ;;
+  esac
+  exit 0
+fi
 
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
   head=""
