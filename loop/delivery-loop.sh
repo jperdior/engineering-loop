@@ -17,8 +17,9 @@
 # derives it from the repository's own docs every time a spec is written, and the human approves it
 # with the rest of the spec. Nothing about the host is configured in a file for this loop's sake.
 #
-# Settings are environment variables, read from the user's `~/.config/engineering-loop/loop.env` (see
-# loop.env.dist): the sandbox tokens and per-developer knobs. The shell wins over the file. The main
+# Settings are environment variables, read from this repository's `.git/engineering-loop/loop.env`
+# and then the user's `~/.config/engineering-loop/loop.env` (see loop.env.dist; `initialize.sh`
+# writes them): the sandbox tokens and per-developer knobs. The shell wins over the files. The main
 # ones:
 #
 #   LOOP_MODEL=opus                   the model of every build session; the PR session runs on sonnet.
@@ -120,12 +121,19 @@ case "$SPEC" in
   /*) echo "delivery-loop: the spec must live inside $ROOT" >&2; exit 2 ;;
 esac
 
-# ---------------------------------------------------------------------------- configuration file
+# ---------------------------------------------------------------------------- configuration files
 #
-# The settings file is the user's, outside every repository: `~/.config/engineering-loop/loop.env`
-# (LOOP_ENV overrides the path). It holds the two sandbox credentials and per-developer knobs, and
-# nothing about any host. A value already exported in the shell is never overwritten, so
-# `LOOP_MODEL=sonnet delivery-loop.sh …` still works.
+# Two settings files, same format, read in this order with the first one winning key by key:
+#
+#   this repository's   <main checkout>/.git/engineering-loop/loop.env
+#   the global one      ~/.config/engineering-loop/loop.env
+#
+# The repository's file lives under .git/ so it can never be committed and is shared by every
+# worktree of the repository; it holds what differs here -- another account, another mode. The
+# global one holds the user's defaults. Neither holds anything about the host's build: the gates
+# come from the spec. A value already exported in the shell is never overwritten, so
+# `LOOP_MODEL=sonnet delivery-loop.sh …` still works. LOOP_ENV names one file to read instead of
+# both, for the tests. `initialize.sh` writes them.
 #
 # `secret` marks a file that holds tokens and should not be readable beyond its owner.
 load_env_file() {
@@ -156,8 +164,17 @@ load_env_file() {
 LOOP_GATES_FROM=""
 [ -z "${LOOP_GATES:-}" ] || LOOP_GATES_FROM="the shell"
 
-LOOP_ENV="${LOOP_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env}"
-load_env_file "$LOOP_ENV" secret
+LOOP_ENV_GLOBAL="${XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env"
+LOOP_ENV_REPO="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)/engineering-loop/loop.env"
+if [ -n "${LOOP_ENV:-}" ]; then
+  LOOP_ENV_NAMES="$LOOP_ENV"
+  load_env_file "$LOOP_ENV" secret
+else
+  LOOP_ENV_NAMES="$LOOP_ENV_REPO or $LOOP_ENV_GLOBAL"
+  # The repository's file first: a key it sets is already set when the global file is read.
+  load_env_file "$LOOP_ENV_REPO" secret
+  load_env_file "$LOOP_ENV_GLOBAL" secret
+fi
 
 # A session is one phase, and that is what bounds its context. A session cannot observe its own
 # token count, so a budget in the prompt is not obeyed; a phase is observable from outside. The loop
@@ -472,7 +489,7 @@ preflight() {
   elif ! gh api "repos/$(origin_nwo)" --silent >/dev/null 2>&1; then
     # An authenticated token that cannot see this repository fails every PR read later as a 404 the
     # loop would have to read as "no PR". A fine-grained PAT scoped to another repository does this.
-    warn "the GitHub token cannot read $(origin_nwo): the GH_TOKEN= line in $LOOP_ENV names a token without access to this repository. Widen it, or run $LOOP_DIR/setup-loop.sh in a terminal and paste one that has it."
+    warn "the GitHub token cannot read $(origin_nwo): the GH_TOKEN= line in $LOOP_ENV_NAMES names a token without access to this repository. Widen it, or run $LOOP_DIR/initialize.sh in a terminal and paste one that has it."
     missing=1
   fi
 
@@ -542,15 +559,16 @@ preflight() {
   case "$LOOP_SANDBOX" in
     0|1) ;;
     '')
-      warn "LOOP_SANDBOX is not set in $LOOP_ENV, so the loop does not know where to run sessions."
-      warn "Choose once:"
-      warn "  in a container with its own two tokens (recommended):   $LOOP_DIR/setup-loop.sh"
-      warn "  on this host, as you, with your ssh keys, gh login and"
-      warn "  the Claude account this shell is logged into:          $LOOP_DIR/setup-loop.sh --host"
+      warn "LOOP_SANDBOX is not set in $LOOP_ENV_NAMES, so the loop does not know where to run sessions."
+      warn "Choose once, in a terminal:  $LOOP_DIR/initialize.sh"
+      warn "It asks whether sessions run in a container (recommended) or on this host, and whether the"
+      warn "answer holds for every repository or this one. To run on this host without questions:"
+      warn "  $LOOP_DIR/initialize.sh --host --repo      (this repository)"
+      warn "  $LOOP_DIR/initialize.sh --host --global    (every repository)"
       missing=1
       ;;
     *)
-      warn "LOOP_SANDBOX=$LOOP_SANDBOX is neither 0 nor 1 (in $LOOP_ENV or the shell)."
+      warn "LOOP_SANDBOX=$LOOP_SANDBOX is neither 0 nor 1 (in $LOOP_ENV_NAMES or the shell)."
       missing=1
       ;;
   esac

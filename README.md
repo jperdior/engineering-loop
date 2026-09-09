@@ -17,17 +17,30 @@ the PR. Nothing merges itself.
 
 ## Install
 
-In Claude Code:
+From a terminal, inside the repository you want to build in:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jperdior/engineering-loop/main/install.sh | sh
+```
+
+It installs the plugin into Claude Code and runs the setup in the same terminal: whether the
+loop's sessions run in a container or on this machine, whether that answer holds for every
+repository or this one, and, for a container, the two tokens it needs. Or do the two halves by
+hand, in Claude Code and then in a terminal:
 
 ```
 /plugin marketplace add jperdior/engineering-loop
 /plugin install engineering-loop@engineering-loop
 ```
+```sh
+<plugin>/loop/initialize.sh
+```
 
-That is the whole install. **Nothing is written into your repository**: the skills and the loop
-live in the plugin, your settings in `~/.config/engineering-loop/loop.env`, the loop's state in
-`~/.local/state/engineering-loop/`. The only files the engine ever adds to a repository are the specs
-you approve, which ship in the PR they describe.
+**Nothing tracked is written into your repository**: the skills and the loop live in the plugin,
+your settings in `~/.config/engineering-loop/loop.env` and, for a repository that differs, in its
+`.git/engineering-loop/loop.env`, the loop's state in `~/.local/state/engineering-loop/`. The only
+files the engine ever adds to a repository are the specs you approve, which ship in the PR they
+describe.
 
 The plugin depends on no other. Where a skill needs a way of working — a design conversation, test
 first, verifying before claiming done — it uses the skill your repository's `AGENTS.md` routes that
@@ -100,14 +113,17 @@ is in `~/.local/state/engineering-loop/<repo>/<branch>.json`.
 
 ## Settings
 
-Personal settings live in `~/.config/engineering-loop/loop.env`, one file for every repository;
-`setup-loop.sh` in the plugin writes the two sandbox tokens into it. A value exported in the shell
-wins.
+Settings live in two files of the same shape, read in this order with the first one winning key by
+key: the repository's `.git/engineering-loop/loop.env`, for what differs in that repository, then
+`~/.config/engineering-loop/loop.env`, your defaults. The repository's file sits under `.git/` so
+it can never be committed and is shared by every worktree of the repository; two accounts on one
+machine is the case it covers. `initialize.sh` in the plugin writes them, and `initialize.sh
+--show` prints what is set, names only. A value exported in the shell wins over both.
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `LOOP_MODEL` | `opus` | the model of every build session; the PR session runs on `sonnet` |
-| `LOOP_SANDBOX` | none, required | `1` runs each session in a container with no host credentials; needs `setup-loop.sh` for the two tokens and `sandbox/build.sh` for the image, both in the plugin's `loop/`. `0` runs on this host as you; `setup-loop.sh --host` records it. The loop refuses to run until one is chosen, and `/ship` asks on first use |
+| `LOOP_SANDBOX` | none, required | `1` runs each session in a container with no host credentials; `initialize.sh` asks for the two tokens and builds the image. `0` runs on this host as you; `initialize.sh --host --repo` or `--global` records it. The loop refuses to run until one is chosen, and `/ship` asks on first use |
 | `MAX_SESSIONS` | phases + 4 | sessions per run before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
 | `SESSION_CONTEXT_ALARM` | half the model window | context, in tokens, above which a phase is reported as cut too large; unset, half of the session model's context window |

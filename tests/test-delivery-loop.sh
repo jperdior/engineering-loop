@@ -1467,7 +1467,7 @@ set +e
 ( export LOOP_SANDBOX=; run_loop --dry-run ); rc=$?
 set -e
 if [ "$rc" = 3 ] && grep -q "LOOP_SANDBOX is not set in $LOOP_ENV" "$TMP/err" \
-   && grep -q "setup-loop.sh --host" "$TMP/err" && ! remote_has feat-one; then pass
+   && grep -q "initialize.sh --host --repo" "$TMP/err" && ! remote_has feat-one; then pass
 else fail "exit $rc: $(tail -3 "$TMP/err")"; fi
 
 CASE="a LOOP_SANDBOX that is neither 0 nor 1 is refused"
@@ -1576,12 +1576,50 @@ if grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' loop/loop.env.dist \
    && grep -q 'LOOP_MODEL' loop/loop.env.dist; then pass
 else fail "template incomplete"; fi
 
-# The settings file is the user's, outside every repository; the default path is under XDG config.
-CASE="the settings file defaults to the user's config directory"
+# Two settings files: the repository's, under its .git/ so it can never be committed and every
+# worktree shares it, and the user's global one under XDG config. The loop and initialize.sh must
+# agree on both paths, or the wizard writes where the loop never looks.
+CASE="the loop and initialize.sh agree on both settings paths"
 # shellcheck disable=SC2016
 if grep -q 'XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env' loop/delivery-loop.sh \
-   && grep -q 'XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env' loop/setup-loop.sh; then pass
+   && grep -q 'XDG_CONFIG_HOME:-$HOME/.config}/engineering-loop/loop.env' loop/initialize.sh \
+   && grep -q 'git rev-parse --git-common-dir.*engineering-loop/loop.env' loop/delivery-loop.sh \
+   && grep -q 'engineering-loop/loop.env' loop/initialize.sh; then pass
 else fail "the loop and the wizard disagree on where loop.env lives"; fi
+
+# The repository's file wins over the global one key by key, so a repository that differs in one
+# thing -- the account, the mode -- carries only that one thing.
+CASE="the repository's settings file wins over the global one, key by key"
+fresh envmerge
+mkdir -p "$TMP/xdg/engineering-loop" "$REPO/.git/engineering-loop"
+printf 'LOOP_MODEL=haiku\nLOOP_SANDBOX=0\nDELIVERY_LOOP_BELL=0\n' > "$TMP/xdg/engineering-loop/loop.env"
+printf 'LOOP_MODEL=sonnet\n' > "$REPO/.git/engineering-loop/loop.env"
+chmod 600 "$TMP/xdg/engineering-loop/loop.env" "$REPO/.git/engineering-loop/loop.env"
+# shellcheck disable=SC2030,SC2031
+if ( unset LOOP_ENV LOOP_SANDBOX; export XDG_CONFIG_HOME="$TMP/xdg"; run_loop ) \
+   && [ "$(grep -c '^sonnet$' "$LOOP_TEST_DIR/models.txt")" = 7 ] \
+   && ! grep -q '^haiku$' "$LOOP_TEST_DIR/models.txt"; then pass
+else fail "models: $(tr '\n' ' ' < "$LOOP_TEST_DIR/models.txt"); $(tail -2 "$TMP/err")"; fi
+
+# A worktree reads the same repository file as the main checkout: the path is the common git dir.
+CASE="a linked worktree reads the repository's settings file, not one of its own"
+fresh_worktree envwt
+mkdir -p "$TMP/xdg2/engineering-loop" "$REPO/.git/engineering-loop"
+printf 'LOOP_SANDBOX=0\nDELIVERY_LOOP_BELL=0\n' > "$TMP/xdg2/engineering-loop/loop.env"
+printf 'LOOP_MODEL=sonnet\n' > "$REPO/.git/engineering-loop/loop.env"
+chmod 600 "$TMP/xdg2/engineering-loop/loop.env" "$REPO/.git/engineering-loop/loop.env"
+# shellcheck disable=SC2030,SC2031
+if ( unset LOOP_ENV LOOP_SANDBOX; export XDG_CONFIG_HOME="$TMP/xdg2"; run_loop_wt --dry-run ) \
+   && grep -q "build sessions on sonnet" "$TMP/out"; then pass
+else fail "$(grep models "$TMP/out"); $(tail -2 "$TMP/err")"; fi
+
+# With neither file present the refusal names both, so the user learns where the answer goes.
+CASE="an unset switch with no settings file names both files"
+fresh envnone
+# shellcheck disable=SC2030,SC2031
+( unset LOOP_ENV; export XDG_CONFIG_HOME="$TMP/xdg3" LOOP_SANDBOX=; run_loop --dry-run ) || true
+if grep -q '\.git/engineering-loop/loop\.env or .*xdg3/engineering-loop/loop\.env' "$TMP/err"; then pass
+else fail "$(grep LOOP_SANDBOX "$TMP/err" | head -2)"; fi
 
 # The contract is the spec's, so no template carries a gate and there is no host file to configure.
 CASE="no template carries the host contract"
