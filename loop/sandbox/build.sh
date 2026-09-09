@@ -22,4 +22,4 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 echo "Built $IMAGE. It carries no credentials: the loop passes CLAUDE_CODE_OAUTH_TOKEN and GH_TOKEN"
-echo "from ~/.config/engineering-loop/loop.env at run time."
+echo "from the settings file at run time (initialize.sh --show names it)."

@@ -68,36 +68,41 @@ common case, not the exception.
      terminal.
    - `gh api repos/<owner>/<repo> --silent`, with the name from `git remote get-url origin`. If it
      fails while `gh auth status` passed, the token cannot see this repository, and every PR read
-     the loop makes later would be a 404. Say it in one line: *the `GH_TOKEN=` line in
-     `~/.config/engineering-loop/loop.env` names a token without access to this repository; widen
-     it, or run `<loop>/setup-loop.sh` in a terminal and paste one that has it.* Nothing else.
+     the loop makes later would be a 404. Say it in one line: *the `GH_TOKEN=` line in the
+     settings file (`<loop>/initialize.sh --show` names it) is a token without access to this
+     repository; widen it, or run `<loop>/initialize.sh` in a terminal and paste one that has it.*
+     Nothing else.
    - `jq`, and `timeout` or `gtimeout`, on PATH. Name the install line otherwise
      (`brew install coreutils jq` on macOS).
-   - **Where the sessions run is the user's decision, made once.** Run `<loop>/setup-loop.sh
-     --show`: it lists every key in `~/.config/engineering-loop/loop.env` as `set` or `EMPTY`
-     without printing a value. The loop refuses to start, dry run included, while `LOOP_SANDBOX`
-     is EMPTY or the file is absent, so settle it here rather than discover it in the plan.
+   - **Where the sessions run is the user's decision, made once.** Run `<loop>/initialize.sh
+     --show`. It lists the two settings files, the global one and this repository's, with every
+     key as `set` or `EMPTY` and never a value, and ends with `effective LOOP_SANDBOX:` followed
+     by the mode the loop will use and which file it came from. The loop refuses to start, dry
+     run included, while that is `unset`, so settle it here rather than discover it in the plan.
 
-     If `LOOP_SANDBOX` is EMPTY or absent, **stop and ask** before anything else, as one question
-     with two options (`AskUserQuestion` where the tool exists, otherwise plain text and wait):
+     If it is `unset`, **stop and wait** for an answer. Say this, in your own words but with every
+     fact in it:
 
-     - **In a container (recommended).** Each session sees only the worktree and two tokens of its
-       own: the one `claude setup-token` prints, which also decides which Claude account the run
-       bills, and a fine-grained GitHub PAT scoped to this repository with *Contents: read and
-       write* and *Pull requests: read and write*. Both last about a year. Needs Docker.
-     - **On this host.** Each session runs as the user, with their ssh keys, their `gh` login,
-       and the Claude account this shell's `CLAUDE_CONFIG_DIR` is logged into. Name that account
-       in the option: `claude auth status` prints its `email` and `orgName`.
+     > The loop runs sessions unattended. We recommend running them in a container: each session
+     > then sees only this worktree and two tokens minted for it, instead of your ssh keys, your
+     > `gh` login and the Claude account this shell is logged into (name it: `claude auth status`
+     > prints `email` and `orgName`). That takes a one-time setup in your terminal:
+     > `<loop>/initialize.sh`. It asks whether to use a container, whether the answer holds for
+     > every repository or this one, and for the two tokens: the one `claude setup-token` prints,
+     > which also decides the Claude account the run bills, and a fine-grained GitHub PAT scoped to
+     > this repository with *Contents* and *Pull requests* read and write. Run it and tell me when
+     > it is done, or say "continue without the container" and I will record that for this
+     > repository and go on.
 
-     Container: tell the user to run `<loop>/setup-loop.sh` in their own terminal, say what it
-     asks for so they have both tokens ready, then wait. When they say it is done, run `--show`
-     again and stop while either token is EMPTY; then `<loop>/sandbox/build.sh` once if the image
-     is missing. Host: run `<loop>/setup-loop.sh --host` yourself; it records `LOOP_SANDBOX=0`
-     and asks nothing. Either way, say in one line which mode is recorded and which account will
-     be billed. The question never comes back: the file holds the answer for every later run.
+     They ran it: run `--show` again; stop while the effective mode is `1` and either token in
+     its file is EMPTY, or the mode is still `unset`. They continue without: run
+     `<loop>/initialize.sh --host --repo` yourself; it records `LOOP_SANDBOX=0` in this
+     repository's `.git/engineering-loop/loop.env` and asks nothing. Either way, say in one line
+     which mode is recorded, in which file, and which account will be billed. The question never
+     comes back: the files hold the answer for every later run.
 
-     If `LOOP_SANDBOX` is already `1`, stop only while either token is EMPTY, with the same
-     instruction to run the script.
+     If the effective mode is already `1`, stop only while either token in its file is EMPTY, with
+     the same instruction to run `<loop>/initialize.sh`.
 
    **Never ask for a token value in the chat**, and never accept one pasted there: a token in a
    message lands in the transcript. The script exists so the values never pass through a
@@ -174,10 +179,10 @@ bounds a session is the phase it is given.
    before the run.
 
 1. **Plan first, always.** Phase B often runs days after Phase A, so re-check the mode
-   first: `<loop>/setup-loop.sh --show`. `LOOP_SANDBOX` EMPTY or absent means the choice
-   in Phase A step 0 was never recorded; ask it now, the same way. `LOOP_SANDBOX=1` with a
-   token EMPTY means the user has to run `<loop>/setup-loop.sh` before anything can start.
-   Then:
+   first: `<loop>/initialize.sh --show`. An effective `LOOP_SANDBOX` of `unset` means the
+   choice in Phase A step 0 was never recorded; ask it now, the same way. `1` with a token
+   EMPTY in its file means the user has to run `<loop>/initialize.sh` before anything can
+   start. Then:
    ```sh
    <loop>/delivery-loop.sh .ai/specs/{file}.md --dry-run
    ```
