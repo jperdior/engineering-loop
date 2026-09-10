@@ -72,6 +72,10 @@ $LOOP/delivery-loop.sh .ai/specs/<file>.md             # build it
 $LOOP/launch.sh .ai/specs/<file>.md                    # the same, detached: what /ship runs
 ```
 
+`launch.sh` detaches `supervise.sh`, which runs the loop and, when the account's usage limit
+refuses a session, waits `LOOP_RESUME_WAIT` and starts it again — up to `LOOP_RESUME_TRIES` times —
+so a run started before bed finishes without anyone waking up to restart it.
+
 A detached run logs to `~/.local/state/engineering-loop/runs/<repo>-<branch>.log`; its last line
 is `delivery-loop: exit N` once it has finished.
 
@@ -127,7 +131,8 @@ machine is the case it covers. `initialize.sh` in the plugin writes them, and `i
 | `MAX_SESSIONS` | phases + 4 | sessions per run before the unit is declared non-converging |
 | `UNIT_TIMEOUT` | `7200` | seconds per session |
 | `SESSION_CONTEXT_ALARM` | half the model window | context, in tokens, above which a phase is reported as cut too large; unset, half of the session model's context window |
-| `DELIVERY_LOOP_NOTIFY` | unset | a command that receives the headline when the loop needs you |
+| `LOOP_RESUME_WAIT` | `1800` | seconds a detached run waits before retrying after a usage-limit pause |
+| `LOOP_RESUME_TRIES` | `12` | how many times a detached run retries a usage-limit pause before giving up |
 
 The gates, the worktree cleanup and the extra denials are not settings: they come from each spec's
 `## Gates` section, which `/spec-writing` derives from your `AGENTS.md` every time.

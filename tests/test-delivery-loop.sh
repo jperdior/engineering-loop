@@ -128,7 +128,19 @@ fresh() {
   #
   # `sed -E`, NOT a BRE with `\|`: alternation in a basic regex is a GNU extension that BSD sed does
   # not have, so on macOS that spelling matches nothing at all and the sweep silently does nothing.
-  for __v in $(set | sed -nE 's/^(LOOP_[A-Za-z0-9_]*|DELIVERY_LOOP_[A-Za-z0-9_]*|MAX_[A-Za-z0-9_]*|UNIT_[A-Za-z0-9_]*|SESSION_[A-Za-z0-9_]*|CLAUDE_BIN)=.*/\1/p'); do
+  #
+  # LC_ALL=C because `set` does not round-trip UTF-8. A variable holding one -- `archived_ledger`
+  # holds a ledger line with em-dashes -- is re-quoted as `$'...'` with the lead byte of each
+  # multi-byte character left raw and its continuation bytes escaped as the TEXT `\200\224`. What
+  # reaches sed is a lone \xe2, which is not valid UTF-8, so a UTF-8 locale makes it refuse the line
+  # with "RE error: illegal byte sequence" -- and BSD sed ABORTS there, so the sweep silently misses
+  # every name that sorts after it. Today that is harmless only because the swept names are
+  # uppercase and sort ahead of `archived_ledger`; one lowercase name would leak state between
+  # cases with nothing but this noise to show for it. The
+  # pattern is pure ASCII and only variable NAMES are wanted, so matching bytes is what is meant.
+  # `sed` is an external command, so the prefix assignment dies with it -- unlike the one on a
+  # function call this sweep exists to undo.
+  for __v in $(set | LC_ALL=C sed -nE 's/^(LOOP_[A-Za-z0-9_]*|DELIVERY_LOOP_[A-Za-z0-9_]*|MAX_[A-Za-z0-9_]*|UNIT_[A-Za-z0-9_]*|SESSION_[A-Za-z0-9_]*|CLAUDE_BIN)=.*/\1/p'); do
     unset "$__v"
   done
   export LOOP_TEST_DIR="$TMP/$1.harness"
@@ -427,6 +439,20 @@ if [ "$rc" = 5 ] && [ "$(sessions feat-one)" = 1 ] && [ "$(phase_ticks feat-one)
 else
   fail "exit $rc, sessions=$(sessions feat-one): $(tail -2 "$TMP/err")"
 fi
+
+# The supervisor is the reason a pause is no longer a chore: driving the REAL loop over the same
+# refusal, it waits and starts it again itself, and the unit lands with no second invocation from
+# anyone. HARNESS_LOOP points run_loop at supervise.sh, which finds delivery-loop.sh beside it.
+CASE="the supervisor carries the real loop through a usage-limit pause on its own"
+fresh supquota
+# Set and restored in place, NOT exported in a subshell: a subshell assignment makes every later
+# read of HARNESS_LOOP look lost, and `fresh` sweeps only the LOOP_/MAX_/UNIT_/SESSION_ names.
+HARNESS_LOOP="$REPO_ROOT/loop/supervise.sh"
+if LOOP_TEST_CLAUDE=quota LOOP_RESUME_WAIT=0 run_loop \
+   && [ "$(ticks 'PR 1' feat-one)" = 1 ] \
+   && grep -q "paused on the usage limit; continuing on my own" "$TMP/out"; then pass
+else fail "the supervisor did not finish the unit: $(tail -2 "$TMP/err")"; fi
+HARNESS_LOOP="$REPO_ROOT/loop/delivery-loop.sh"
 
 CASE="there is no budget"
 if ! grep -qE 'BUDGET_USD|max-budget-usd' loop/delivery-loop.sh loop/loop.env.dist; then pass
@@ -1216,31 +1242,6 @@ if [ "$rc" = 3 ]; then pass; else fail "exit $rc"; fi
 
 # --------------------------------------------------------------------------- the notifier
 
-# The notifier is what tells a human a long run has landed, so a broken one must never be able to
-# lose a finished unit -- it runs after the work, detached from the run's exit status.
-CASE="the notifier fires on a completed unit"
-fresh notify
-# Both expansions belong to the generated notifier, resolved when the LOOP runs it, not now.
-# shellcheck disable=SC2016
-printf '#!/bin/sh\necho "$1" >> "$LOOP_TEST_DIR/notified"\n' > "$TMP/notify.sh"
-chmod +x "$TMP/notify.sh"
-if DELIVERY_LOOP_BELL=0 DELIVERY_LOOP_NOTIFY="$TMP/notify.sh" run_loop \
-   && grep -q "open and waiting for review" "$LOOP_TEST_DIR/notified"; then pass
-else fail "no notification: $(cat "$LOOP_TEST_DIR/notified" 2>/dev/null)"; fi
-
-CASE="the notifier fires on an escalation"
-fresh notifyesc
-if DELIVERY_LOOP_BELL=0 DELIVERY_LOOP_NOTIFY="$TMP/notify.sh" LOOP_TEST_CLAUDE=silent run_loop; then
-  fail "should have escalated"
-elif grep -q "escalated" "$LOOP_TEST_DIR/notified"; then pass
-else fail "no escalation notification"; fi
-
-CASE="a broken notifier never fails the run"
-fresh notifybad
-if DELIVERY_LOOP_BELL=0 DELIVERY_LOOP_NOTIFY=/nonexistent-notifier run_loop \
-   && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
-else fail "a missing notifier lost the unit: $(tail -2 "$TMP/err")"; fi
-
 # --------------------------------------------------------------------------- the denials
 
 # Each dangerous verb must be denied by EVERY route to it, not just its most obvious name. The match
@@ -1549,12 +1550,13 @@ else fail "$(grep -c 'make deploy' "$LOOP_TEST_DIR/denials.txt") of 7 launches c
 
 CASE="the env file sets values the shell has not"
 fresh envfile
-# DELIVERY_LOOP_NOTIFY precisely because run_loop never exports it -- a variable the harness sets
-# would be testing the harness, and would pass whether the file was read or not.
-printf '# a comment\n\nDELIVERY_LOOP_BELL=0\nDELIVERY_LOOP_NOTIFY=%s\n' "$TMP/notify.sh" \
-  > "$LOOP_ENV"
-if run_loop && grep -q "open and waiting" "$LOOP_TEST_DIR/notified" 2>/dev/null; then pass
-else fail "the file's DELIVERY_LOOP_NOTIFY never applied"; fi
+# LOOP_MODEL precisely because run_loop never exports it -- a variable the harness sets would be
+# testing the harness, and would pass whether the file was read or not. The next case is its mirror:
+# here the file is the only source, there the shell overrides it.
+printf '# a comment\n\nLOOP_MODEL=haiku\n' > "$LOOP_ENV"
+# Six, not seven: the PR session runs on PR_MODEL whatever the build model is.
+if run_loop && [ "$(grep -c '^haiku$' "$LOOP_TEST_DIR/models.txt")" = 6 ]; then pass
+else fail "the file's LOOP_MODEL never applied: $(tr '\n' ' ' < "$LOOP_TEST_DIR/models.txt")"; fi
 
 # The file is where the settings LIVE, not something that fights the command line.
 CASE="the shell wins over the env file"
@@ -1566,7 +1568,7 @@ else fail "the file overrode an explicit LOOP_MODEL: $(tr '\n' ' ' < "$LOOP_TEST
 
 CASE="a malformed line in the env file is skipped, not executed"
 fresh envjunk
-printf 'not a pair\nrm -rf /tmp/should-not-run\nDELIVERY_LOOP_BELL=0\n' > "$LOOP_ENV"
+printf 'not a pair\nrm -rf /tmp/should-not-run\nLOOP_MODEL=haiku\n' > "$LOOP_ENV"
 if run_loop && [ "$(ticks 'PR 1' feat-one)" = 1 ]; then pass
 else fail "$(tail -2 "$TMP/err")"; fi
 
@@ -1592,7 +1594,7 @@ else fail "the loop and the wizard disagree on where loop.env lives"; fi
 CASE="the repository's settings file wins over the global one, key by key"
 fresh envmerge
 mkdir -p "$TMP/xdg/engineering-loop" "$REPO/.git/engineering-loop"
-printf 'LOOP_MODEL=haiku\nLOOP_SANDBOX=0\nDELIVERY_LOOP_BELL=0\n' > "$TMP/xdg/engineering-loop/loop.env"
+printf 'LOOP_MODEL=haiku\nLOOP_SANDBOX=0\n' > "$TMP/xdg/engineering-loop/loop.env"
 printf 'LOOP_MODEL=sonnet\n' > "$REPO/.git/engineering-loop/loop.env"
 chmod 600 "$TMP/xdg/engineering-loop/loop.env" "$REPO/.git/engineering-loop/loop.env"
 # shellcheck disable=SC2030,SC2031
@@ -1605,7 +1607,7 @@ else fail "models: $(tr '\n' ' ' < "$LOOP_TEST_DIR/models.txt"); $(tail -2 "$TMP
 CASE="a linked worktree reads the repository's settings file, not one of its own"
 fresh_worktree envwt
 mkdir -p "$TMP/xdg2/engineering-loop" "$REPO/.git/engineering-loop"
-printf 'LOOP_SANDBOX=0\nDELIVERY_LOOP_BELL=0\n' > "$TMP/xdg2/engineering-loop/loop.env"
+printf 'LOOP_SANDBOX=0\n' > "$TMP/xdg2/engineering-loop/loop.env"
 printf 'LOOP_MODEL=sonnet\n' > "$REPO/.git/engineering-loop/loop.env"
 chmod 600 "$TMP/xdg2/engineering-loop/loop.env" "$REPO/.git/engineering-loop/loop.env"
 # shellcheck disable=SC2030,SC2031

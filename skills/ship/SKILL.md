@@ -209,21 +209,48 @@ bounds a session is the phase it is given.
    tail -1 <log>          # the last line names the run's state; 'delivery-loop: exit N' ends it
    ```
 
-   **Watch with a timer that exits, not with a process that waits.** A monitor on the
-   file and a `tail -F | grep` pipeline are both long-lived processes: the machine kills
-   them under memory pressure — two Opus sessions and two test stacks are enough — and
-   the run carries on with nobody watching. A session that waits on them alone waits
-   forever, and the user reads that as a hung feature. The primary signal is therefore
-   one background command that sleeps and then prints the last loop line:
+   **Watch the log as a stream of events; never own a timer.** The run does not need
+   you: `launch.sh` detaches a supervisor that builds the unit and, when the account's
+   usage limit refuses a session, waits and continues on its own. So watching is
+   narration, and it must cost the host nothing. A session that re-arms a `sleep`
+   every ten minutes for a six-hour build is holding a background process the whole
+   time, and on a loaded host the harness reclaims exactly those first — which is how
+   a watch dies and, before the supervisor existed, took the run with it.
+
+   Use your harness's event watch on the log, one line per event, for the length of
+   the session:
    ```sh
-   sleep 600; grep '^delivery-loop: ' <log> | tail -1
+   tail -f -n +1 <log> | grep --line-buffered '^delivery-loop: '
    ```
-   run in the background so that its exit — after its sleep, or when something kills
-   it — wakes you. On every wake, read the line it printed, act on it as below, and
-   arm the same command again while the run is in flight. A monitor on the file may
-   run beside it; it is a bonus, never the thing you rely on. Ten minutes is the
-   cadence while building: a phase lasts twenty to forty, and a shorter sleep burns
-   turns narrating nothing.
+   `--line-buffered` is not optional: without it grep holds matches in its buffer and
+   the events arrive in clumps or not at all. If your harness has no event watch, fall
+   back to one background command that sleeps ten minutes and prints
+   `grep '^delivery-loop: ' <log> | tail -1`, re-armed on each wake — the old way, and
+   worse only in what it costs the host.
+
+   **Losing the watch is not losing the run.** If the stream stops, say nothing about
+   it and re-arm it; the log on disk is the record and the supervisor is still
+   building. Never tell the user a run is dead because your watch went quiet — check
+   the pid first.
+
+   **Any session can answer "where is it?", including this one after a restart.** The
+   state of a run is the log, never the conversation, so a resumed session and a
+   brand-new one answer the same way and neither needs to have been present for
+   anything. The path is derived, not remembered:
+   `~/.local/state/engineering-loop/runs/<repo>-<branch>.log`, with `<repo>` the main
+   checkout's directory name.
+   ```sh
+   grep '^delivery-loop: ' <log> | tail -5   # what has happened
+   cat <log>.pid                             # the run's process
+   ```
+   Read it as: a `delivery-loop: exit N` line means the run is over and N is the
+   answer; no exit line with that pid alive in `ps` means it is still working; no exit
+   line with the pid gone means it was killed, and the last event says where it stopped.
+   `--dry-run` adds the phases and the resume decision without changing anything.
+
+   **A restarted session has no watch** — the process did not survive the restart, and
+   nothing re-arms it for you. So on picking a run back up, report the state from the
+   log first, then arm the watch again for what is still to come.
 
    **Match `^delivery-loop: ` and nothing else.** The log also carries the sessions'
    and the gates' output, and a bare `error` or `fail` matches a passing test's name.
@@ -271,17 +298,22 @@ bounds a session is the phase it is given.
 loop re-runs on the host; there is no default, and pre-flight refuses a spec without
 one. `--dry-run` prints them with their source.
 
-**If the loop pauses (exit 5), the account's usage limit is reached.** Nothing is
-wrong with the unit, and nothing at all happens until the limit resets — which is
-hours, and is the one wait the user must not mistake for a hang. So say two things,
-once: that the run is paused on the usage limit, and **when it resumes**. The reset
-time is in the refused session's own result: `jq -r .result <state>/<branch>.json`
-prints the CLI's message, `You've hit your … limit · resets 3:20am (UTC)`. Then keep
-the ten-minute timer running silently, and when the reset time has passed, re-run the
-launch yourself:
-```sh
-<loop>/launch.sh .ai/specs/{file}.md
-```
+**A usage-limit pause is a message, not a task.** When a session is refused, the log
+carries `paused: the usage limit is reached` and the detached supervisor waits and
+starts the loop again by itself — every `LOOP_RESUME_WAIT` (30 minutes by default),
+up to `LOOP_RESUME_TRIES` times. You will see `paused on the usage limit; continuing
+on my own in 30m` and later `the usage-limit wait is over`, and then the phases carry
+on. **Never run `launch.sh` yourself to "resume" a pause**: the loop takes a per-unit
+lock, so a second launch is refused, and the one that matters is already waiting.
+
+So say two things once — that the run is paused on the usage limit, and that it will
+continue on its own — and then go quiet until the next event. The reset time, if the
+user asks for it, is in the refused session's own result: `jq -r .result
+<state>/<branch>.json` prints `You've hit your … limit · resets 3:20am (UTC)`.
+
+Only `delivery-loop: still paused on the usage limit after N attempts` means the wait
+gave up, and that is the one case where relaunching by hand is right.
+
 The user's OK at gate 1 covers the whole build; a pause changes nothing about the
 unit, and asking for a second OK at four in the morning is what leaves a run idle
 until breakfast. Relaunching **continues the refused session** — `claude --resume`
