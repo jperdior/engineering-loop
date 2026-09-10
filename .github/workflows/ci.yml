@@ -30,6 +30,7 @@ jobs:
         run: bash tests/test-delivery-loop.sh
       - name: The parsers and measurements
         run: |
+          bash tests/test-supervise.sh
           bash tests/test-parse-ledger.sh
           bash tests/test-unit-size.sh
           bash tests/test-reclaim-worktree.sh

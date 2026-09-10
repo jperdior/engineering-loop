@@ -307,20 +307,9 @@ next_closing_step() {
 log()  { printf 'delivery-loop: %s\n' "$*"; }
 warn() { printf 'delivery-loop: %s\n' "$*" >&2; }
 
-# A run ends needing a human, long after anyone stopped watching. The bell goes to /dev/tty because
-# stdout is usually a log file. DELIVERY_LOOP_NOTIFY receives the headline as $1 and may never fail
-# the run.
-attention() {
-  # stderr is silenced before /dev/tty is opened: a detached run has no tty, and the shell reports
-  # the failed open on the stderr it had at that point.
-  [ "${DELIVERY_LOOP_BELL:-1}" = "0" ] || printf '\a' 2>/dev/null > /dev/tty || true
-  [ -z "${DELIVERY_LOOP_NOTIFY:-}" ] || "$DELIVERY_LOOP_NOTIFY" "$1" >/dev/null 2>&1 || true
-}
-
 escalate() {
   warn "ESCALATE ($1): $2"
   ESCALATED=1
-  attention "delivery-loop: $1 escalated — $2"
 }
 
 # ---------------------------------------------------------------------------- the spec on the branch
@@ -2398,11 +2387,9 @@ KEPT_NOTE="$(kept_worktree_note)"
 [ -z "$KEPT_NOTE" ] || log "$KEPT_NOTE"
 
 if [ "$PAUSED" = 1 ]; then
-  log "paused: the usage limit is reached. Re-run the same command once it resets; the loop continues"
-  log "the refused session on $BRANCH, in the worktree it left."
-  attention "delivery-loop: paused on the usage limit — re-run to continue $UNIT${KEPT_NOTE:+; $KEPT_NOTE}"
+  log "paused: the usage limit is reached. The next invocation continues the refused session on $BRANCH, in the worktree it left"
   exit 5
 fi
 [ "$ESCALATED" = 0 ] || exit 4
-[ "$UNIT_OK" = 0 ] || attention "delivery-loop: $UNIT built, PR #${PR_NUMBER:-?} open and waiting for review$([ "$PR_CONFLICTS" = 1 ] && printf '; it conflicts with main')"
+[ "$UNIT_OK" = 0 ] || log "$UNIT built, PR #${PR_NUMBER:-?} open and waiting for review$([ "$PR_CONFLICTS" = 1 ] && printf '; it conflicts with main')"
 exit 0

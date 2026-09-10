@@ -5,8 +5,13 @@
 # A chat session cannot run the loop in the foreground: a tool call times out long before a unit is
 # built, and a plain background job dies with the session or under memory pressure. This starts the
 # loop in its own process group with nohup, sends its output to a log under the user's state
-# directory, records the pid beside the log, and prints both. The loop's exit code is appended to the
-# log as `delivery-loop: exit N`, so a reader of the log alone can tell a finished run from a hung one.
+# directory, records the pid beside the log, and prints both. The exit code is appended to the log as
+# `delivery-loop: exit N`, so a reader of the log alone can tell a finished run from a hung one.
+#
+# What is detached is supervise.sh, not delivery-loop.sh: a run stopped by the account's usage limit
+# has to be started again, and a wait that lives in the chat is the one thing this script exists to
+# avoid. The supervisor does that waiting in here, so the only exit line the log ever carries is the
+# run's real answer.
 #
 # It is a script rather than a line in /ship because a worktree-isolated session's guard refuses a
 # compound `nohup bash -c '…'` it cannot read; one plain command it can.
@@ -41,7 +46,7 @@ LOG="$RUNS/$(basename "$MAIN_ROOT")-$BRANCH.log"
 (
   set -m
   # shellcheck disable=SC2016
-  nohup bash -c '"$0" "$1"; echo "delivery-loop: exit $?"' "$LOOP_DIR/delivery-loop.sh" "$SPEC" \
+  nohup bash -c '"$0" "$1"; echo "delivery-loop: exit $?"' "$LOOP_DIR/supervise.sh" "$SPEC" \
     > "$LOG" 2>&1 < /dev/null &
   echo $! > "$LOG.pid"
 )
