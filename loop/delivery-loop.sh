@@ -668,6 +668,12 @@ refresh_contract() {
   local tmp="$PHASES.spec" gates
   spec_on_branch "$tmp"
 
+  # The shape the sessions inherit, recorded before any of them runs. Read from the spec itself even
+  # when LOOP_GATES overrides what the loop will run, because this is what the spec declares, not
+  # what this invocation executes; `contract_intact` compares against it after every session.
+  SPEC_HEADINGS="$(spec_headings "$tmp")"
+  SPEC_GATES="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --gates 2>/dev/null | join_with ';' || true)"
+
   if [ -z "$LOOP_GATES" ]; then
     if ! gates="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --gates 2>"$PHASES.err")"; then
       warn "$SPEC declares no gates: its ## Gates section is missing, empty or malformed."
@@ -692,6 +698,46 @@ refresh_contract() {
 
   add_extra_denials
   return 0
+}
+
+# ---------------------------------------------------------------------------- the spec's own shape
+#
+# Every phase session rewrites the notes under `## Progress`, and the sections the loop reads sit
+# directly beneath them -- `## Gates` first. A rewrite that takes "the notes beneath the checklist"
+# to mean everything after it truncates the spec's tail, and until this check existed nothing
+# noticed: the phase checklist is re-read every session, but the gates are read once at pre-flight
+# and cached, so the run carried on against a contract that was no longer in the file and every
+# later invocation was refused by pre-flight instead.
+#
+# So the gates are compared, not just parsed. A session stuck on a red gate can edit the line as
+# easily as delete it, and a weakened gate the loop never re-reads would report as a clean pass.
+# Headings are compared one way only: a session may add a section, never drop one.
+SPEC_HEADINGS=""
+SPEC_GATES=""
+
+spec_headings() { grep '^## ' "$1" || true; }
+
+# Prints the reason and returns 1 when the spec on the branch no longer matches what pre-flight
+# read. Called after every session, beside the checklist re-read.
+contract_intact() {
+  local tmp="$PHASES.spec" gone gates rc=0
+  spec_on_branch "$tmp"
+
+  gone="$(comm -23 <(printf '%s\n' "$SPEC_HEADINGS" | sort -u) \
+                   <(spec_headings "$tmp" | sort -u) | join_with ', ')"
+  gates="$("$LOOP_DIR/parse-ledger.sh" "$tmp" --gates 2>/dev/null | join_with ';' || true)"
+  rm -f "$tmp"
+
+  if [ -n "$gone" ]; then
+    printf 'the session deleted %s from %s; the spec is the unit contract, not its scratch space' \
+      "$gone" "$SPEC"
+    rc=1
+  elif [ "$gates" != "$SPEC_GATES" ]; then
+    printf 'the session changed the ## Gates of %s: pre-flight read [%s], origin now has [%s]' \
+      "$SPEC" "$SPEC_GATES" "$gates"
+    rc=1
+  fi
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------- the lock
@@ -1237,8 +1283,8 @@ phase_prompt() {
   if [ -n "$skills" ]; then
     skills_block="Skills: $skills
         the host's own skills this phase names. Invoke each one BEFORE writing code: they are how
-        this repository scaffolds, tests and checks what the phase builds, and /implement-spec
-        treats the list as binding."
+        this repository scaffolds, tests and checks what the phase builds, and
+        /engineering-loop:implement-spec treats the list as binding."
   fi
   cat <<PROMPT
 You are implementing exactly one phase of an approved spec, unattended, on a branch that already
@@ -1257,15 +1303,19 @@ phase's own section of the spec, and only then the rest.
 $(resolve_block)
 
 You are the implementer of this phase -- do not dispatch an implementer subagent. Follow
-/implement-spec's rules for a loop-driven session: the failing test first, then the code, then
-/sync-context-docs and /run-gates $UNIT_BASE with every in-scope gate green. Build nothing from any
-other phase, however small it looks; the next session gets the next phase.
+/engineering-loop:implement-spec's rules for a loop-driven session: the failing test first, then
+the code, then /engineering-loop:sync-context-docs and /engineering-loop:run-gates $UNIT_BASE with
+every in-scope gate green. Build nothing from any other phase, however small it looks; the next
+session gets the next phase.
 
 Then, in this order:
   1. commit, exactly one commit for the code:  feat(<scope>): $phase — $title (spec: $spec)
   2. in the spec, tick this phase's line under "## Progress" (- [x] **$phase** …) and rewrite the
-     notes beneath the checklist: what you learned that the spec does not already say, and what the
-     next phase must know. Commit that too.
+     _Notes:_ block beneath the checklist: what you learned that the spec does not already say, and
+     what the next phase must know. Commit that too.
+     Edit those two things and nothing else in the spec. "Beneath the checklist" is the _Notes:_
+     block alone -- it ends where the next "## " heading begins. Everything from "## Gates" on is
+     the contract this run is built against, and a session that drops a heading is escalated.
   3. push
   4. write the sentinel.
 
@@ -1288,19 +1338,20 @@ PROMPT
 closing_step_block() {
   case "$1" in
     docs) cat <<BLOCK
-Your step: the context docs. Run /sync-context-docs against $UNIT_BASE so the AGENTS.md / CLAUDE.md
-nearest to every directory this unit touched describes the code as it now is. Commit and push
-anything it changes. If nothing needed changing, push nothing: the branch tip is still what you
-report.
+Your step: the context docs. Run /engineering-loop:sync-context-docs against $UNIT_BASE so the
+AGENTS.md / CLAUDE.md nearest to every directory this unit touched describes the code as it now
+is. Commit and push anything it changes. If nothing needed changing, push nothing: the branch tip
+is still what you report.
 BLOCK
     ;;
     review) cat <<BLOCK
-Your step: the code review. The docs are already synced. Run /code-review over
+Your step: the code review. The docs are already synced. Run /engineering-loop:code-review
+over
   git diff \$(git merge-base "$UNIT_BASE" HEAD)...HEAD
 with the reviewers on opus. Resolve every Critical and High finding in one fix wave; commit and
-push it. Then /run-gates $UNIT_BASE in the foreground until every in-scope gate is green, and one
-scoped re-review of the fix diff; commit and push. A finding you cannot resolve without a human is
-an ESCALATE, not a note in the PR.
+push it. Then /engineering-loop:run-gates $UNIT_BASE in the foreground until every in-scope gate
+is green, and one scoped re-review of the fix diff; commit and push. A finding you cannot resolve
+without a human is an ESCALATE, not a note in the PR.
 
 The fix wave edits the unit's own code and tests. A finding against a host skill, an AGENTS.md or
 another doc beyond what the spec names is written into the review as a proposal and left alone:
@@ -1309,9 +1360,9 @@ to make.
 BLOCK
     ;;
     archive) cat <<BLOCK
-Your step: the ledger. The docs are synced and the review is resolved. Run /archive-spec $SPEC: it
-ticks this unit's line under ## Delivery and moves the spec to its implemented/ directory. Commit
-and push.
+Your step: the ledger. The docs are synced and the review is resolved. Run
+/engineering-loop:archive-spec $SPEC: it ticks this unit's line under ## Delivery and moves the
+spec to its implemented/ directory. Commit and push.
 BLOCK
     ;;
   esac
@@ -1810,7 +1861,7 @@ hit_usage_limit() {
 verify_session() {
   local kind="$1" name="$2" json_file="$3"
   local status_file="$UNIT_DIR/status"
-  local sentinel tip handover=0
+  local sentinel tip handover=0 reason
 
   # A session refused for the usage limit wrote no sentinel and did no work; neither is a finding
   # about the unit.
@@ -1883,6 +1934,11 @@ verify_session() {
   # sentinel for the session's kind is an escalation.
   if ! refresh_phases; then
     escalate "$UNIT" "the ## Progress checklist on origin/$BRANCH no longer parses: $(head -1 "$PHASES.err")"
+    return 1
+  fi
+  # The checklist parsing is not proof the rest of the spec survived the same edit.
+  if ! reason="$(contract_intact)"; then
+    escalate "$UNIT" "$reason"
     return 1
   fi
   if [ "$kind" = phase ]; then
@@ -2337,9 +2393,9 @@ if [ "$UNIT_OK" = 1 ] && prove_unit; then
     # carries no telemetry file -- and rewritten afterwards with the PR number.
     record_telemetry "" "$( cd "$UNIT_WT" && "$LOOP_DIR/unit-size.sh" origin/main || true )"
     run_claude "$UNIT_WT" \
-      "Run /open-pr with --base main. This branch carries the whole delivery unit $UNIT of $SPEC, one
-commit per phase. Title it: <type>(<scope>): <the feature>. Do not list the phases in the title.
-The per-session telemetry of this unit is the markdown table in $(telemetry_file); put it in the
+      "Run /engineering-loop:open-pr with --base main. This branch carries the whole delivery
+unit $UNIT of $SPEC, one commit per phase. Title it: <type>(<scope>): <the feature>. Do not list
+the phases in the title. The per-session telemetry of this unit is the markdown table in $(telemetry_file); put it in the
 PR body under a '## Sessions' heading, as it is." \
       "$STATE_DIR/$BRANCH.pr.json" "$PR_MODEL" || escalate "$UNIT" "/open-pr failed"
     # One probe answers both questions: is there a PR, and what is its number.
