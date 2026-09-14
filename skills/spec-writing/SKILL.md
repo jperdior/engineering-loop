@@ -102,7 +102,7 @@ analysis and 2-3 alternative designs with trade-offs.
     only place the host's skills are resolved, and the human who approves the spec reads the
     resolution: a phase that names the wrong skill, or none where one applies, is caught here.
 
-    Then declare a `## Delivery` section — **one unit, for the whole feature**:
+    Then declare a `## Delivery` section — **one unit, one line, for the whole spec**:
 
     ```markdown
     ## Delivery
@@ -110,17 +110,22 @@ analysis and 2-3 alternative designs with trade-offs.
     - [ ] **PR 1** — `feat-<slug>` — the whole feature — est ~600
     ```
 
-    The unit's **branch is its backticked name**, directly after the `**PR N**` label, and it is
+    The unit's **branch is its backticked name**, directly after the `**PR 1**` label, and it is
     the branch the delivery loop builds on. `<loop>/parse-ledger.sh` reads this grammar, and a spec
     without this section cannot be implemented — the harness stops and asks. `est ~N` is a
     reviewable-line estimate kept when the line is ticked so estimate-versus-realised stays
     comparable; **it bounds nothing**. `<loop>/unit-size.sh` reports and always exits 0.
 
-    **Never ask the user how to cut the units.** It is not a product decision and
-    they should not spend attention on it: one unit unless a deployment seam forces
-    otherwise, and if one does, say so in the ledger line rather than opening a menu. The seams are
-    in `references/delivery-units.md`; a second unit with no seam named is a High finding in
-    `/pre-implement-spec`.
+    **A spec is exactly one unit, and the ledger is exactly one line.** There is no second `PR 2`,
+    ever. Nothing builds a two-line ledger — `<loop>/delivery-loop.sh` refuses it before it starts,
+    and `/pre-implement-spec` reports it Critical. **Never ask the user how to cut the units**: it
+    is not a product decision and there is nothing to cut.
+
+    **A deployment seam makes a second spec, not a second unit.** When the work has one — the seams
+    are in `references/delivery-units.md` — this spec covers only the part that merges **first**,
+    whole and standing on its own, and the remainder goes in the TLDR as a `**Deferred:**` line
+    naming the seam that defers it. It is specced later, by its own cycle, against the `main` this
+    one has merged into. A split with no seam named is a High finding in `/pre-implement-spec`.
 
     Then declare a `## Progress` section that opens with the phase checklist — one line per phase,
     in the order of `## Phasing`, the same titles — followed by the notes sessions leave for each
@@ -152,8 +157,8 @@ analysis and 2-3 alternative designs with trade-offs.
     session reads them before the phases. They are the ONLY thing that survives between sessions;
     anything left in a session's head is lost.
 
-    `/implement-spec` ticks each phase as it lands; `/archive-spec` ticks the ledger and moves the
-    spec to `.ai/specs/implemented/` once no unit is left unticked.
+    `/implement-spec` ticks each phase as it lands; `/archive-spec` ticks the ledger's one line and
+    moves the spec to `.ai/specs/implemented/`.
 
     Then declare a `## Gates` section — **the host contract, derived from the host's own docs, every
     time**. Read the root `AGENTS.md` / `CLAUDE.md`: the commands its validation section names as
@@ -267,7 +272,7 @@ See [references/spec-checklist.md](references/spec-checklist.md).
 ## Reference Materials
 
 - [references/spec-template.md](references/spec-template.md) — the canonical skeleton
-- [references/delivery-units.md](references/delivery-units.md) — why one unit is the default, and the deployment seams that justify more
+- [references/delivery-units.md](references/delivery-units.md) — why a spec is always one unit, and how a deployment seam makes a second spec instead
 - [references/spec-checklist.md](references/spec-checklist.md) — the review checklist
 - [references/compliance-gate.md](references/compliance-gate.md) — final compliance gate
 - The host's root `AGENTS.md` / `CLAUDE.md`, and the nearest one to each area the spec touches — the conventions this spec is held to

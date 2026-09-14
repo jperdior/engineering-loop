@@ -413,8 +413,9 @@ preflight() {
 
   # One unit, read from the ledger, parsed once. The run fails if the ledger does not parse: a
   # malformed ledger read as an empty list would end "built nothing", exit 0, which is the worst
-  # outcome an unattended tool can produce. Ticked units are history; this run builds the one
-  # unticked unit. Two or more is a deployment-seam decision a human took, built by hand.
+  # outcome an unattended tool can produce. A spec IS one unit, so a ticked line is history and an
+  # unticked one is this run; two unticked lines is a spec that was written wrong, not a bigger
+  # feature, and no flow anywhere builds it -- a deployment seam makes a second SPEC.
   if ! "$LOOP_DIR/parse-ledger.sh" "$SPEC" > "$LEDGER"; then
     warn "the ledger in $SPEC does not parse; refusing to run"
     return 1
@@ -430,8 +431,9 @@ preflight() {
       BRANCH="$(awk -F'|' '$1 == " " { print $3; exit }' "$LEDGER")"
       ;;
     *)
-      warn "the ledger in $SPEC has $owed unticked units; this loop builds exactly one."
-      warn "A spec with several units is built by hand, one /new-feature + /implement-spec per unit."
+      warn "the ledger in $SPEC has $owed unticked units; a spec is exactly one delivery unit."
+      warn "Nothing builds a multi-unit ledger. Cut this spec down to the unit that merges first,"
+      warn "and defer the rest to its own spec, written once this one has merged."
       return 1
       ;;
   esac

@@ -17,7 +17,7 @@ a pass.
 
 | Gate | Question | Pass criteria |
 |------|----------|---------------|
-| Delivery | Is there a `## Delivery` ledger with **one** unit, on one line, naming its branch first in backticks? | Yes. One unit is the default and needs no justification; more than one must name a real deployment seam per unit and leave `main` deployable when merged in ledger order. See `delivery-units.md`. |
+| Delivery | Is there a `## Delivery` ledger with **exactly one** unit, on one line, naming its branch first in backticks? | Yes, always — a spec is one delivery unit and needs no justification. A second line is malformed: nothing builds it, and a deployment seam makes a second *spec*, with the deferred part named in the TLDR's `**Deferred:**` line. See `delivery-units.md`. |
 | Progress | Is there a `## Progress` section opening with one `- [ ] **Phase N** — title` line per phase, in the order and with the titles of `## Phasing`? | Yes. Every unindented checkbox in the section is a phase line; notes are prose under `_Notes:_`. |
 | Phase size | Can each phase be built by **one fresh session** — one seam, one module, the files it must open named in its own section? | Yes. A phase that needs half the tree read first is two phases. |
 | Tests | Does each phase name the tests that prove it, in the frameworks and at the paths the host uses? | Yes. A phase whose tests live in another phase is not independently verifiable. |

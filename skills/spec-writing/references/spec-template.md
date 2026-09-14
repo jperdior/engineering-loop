@@ -14,6 +14,9 @@ committed spec.
 
 {2-3 sentences. What is this? Why now? What changes?}
 
+{Only when a deployment seam defers part of the work to a later spec — omit the line otherwise:}
+**Deferred:** {what is left} — {the seam that defers it}. Its own spec, after this one merges.
+
 ## Overview
 
 {Context, motivation, business value. 1-2 paragraphs.}
@@ -95,9 +98,10 @@ One phase is one session. Each phase has its own section, in the order and with 
 
 ## Delivery
 
-One checklist line: the feature is one delivery unit (= one branch, one PR). The unit's **branch is
-its backticked name**, directly after the `**PR N**` label, and it is the branch the delivery loop
-builds on. `<loop>/parse-ledger.sh` reads this grammar. Required — the harness stops without it.
+Exactly one checklist line, always: a spec is one delivery unit (= one branch, one PR). The unit's
+**branch is its backticked name**, directly after the `**PR 1**` label, and it is the branch the
+delivery loop builds on. `<loop>/parse-ledger.sh` reads this grammar. Required — the harness stops
+without it, and refuses a second line: a deployment seam makes a second **spec**, never a `PR 2`.
 
 - [ ] **PR 1** — `feat-{slug}` — {the whole feature} — est ~{N}
 
@@ -113,8 +117,9 @@ and the delivery loop appends the measurements and `(#PR)` once it does. The mea
 **not** counted by hand — `<loop>/unit-size.sh` prints them in exactly this order. It reports and
 always exits 0; no size bounds anything.
 
-A second unit exists only for a deployment seam (`references/delivery-units.md`); say why in its
-line, and state the merge order inline: `(merge first — {why})`.
+There is never a `PR 2`. A deployment seam (`references/delivery-units.md`) makes a second **spec**,
+written once this one has merged — so the part it defers is named in the TLDR's `**Deferred:**`
+line, with its seam and its merge order, and gets no line here.
 
 ## Progress
 

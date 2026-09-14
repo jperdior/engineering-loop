@@ -755,7 +755,9 @@ else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
 
 # --------------------------------------------------------------------------- the ledger and the phases
 
-CASE="a ledger with two unticked units is refused"
+# A spec IS one delivery unit, so a second unticked line is a malformed spec rather than a bigger
+# feature: nothing anywhere builds it, and the refusal has to say what to do instead.
+CASE="a ledger with two unticked units is refused as a malformed spec"
 fresh twounits
 # shellcheck disable=SC2016
 awk '{ print } /^- \[ \] \*\*PR 1\*\*/ { print "- [ ] **PR 2** — `feat-two` — a second unit — est ~100" }' \
@@ -764,7 +766,8 @@ git -C "$REPO" add -A && git -C "$REPO" commit -qm "two units"
 set +e
 run_loop; rc=$?
 set -e
-if [ "$rc" = 3 ] && grep -q "unticked units; this loop builds exactly one" "$TMP/err" && ! remote_has feat-one; then pass
+if [ "$rc" = 3 ] && grep -q "a spec is exactly one delivery unit" "$TMP/err" \
+   && grep -q "defer the rest to its own spec" "$TMP/err" && ! remote_has feat-one; then pass
 else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
 
 CASE="a spec with no phase checklist is refused"

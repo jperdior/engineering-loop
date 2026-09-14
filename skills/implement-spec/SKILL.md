@@ -48,9 +48,10 @@ provides it; else the steps written here. Nothing outside this plugin is require
 
 ## The execution model — one spec phase = one task
 
-A spec is one **delivery unit** — one branch, one PR — named by the checklist line in its
+A spec is one **delivery unit** — one branch, one PR — named by the single checklist line in its
 `## Delivery` section, and its **phases are the tasks**, listed as the checklist that opens
-`## Progress`. `<loop>/parse-ledger.sh` reads both.
+`## Progress`. `<loop>/parse-ledger.sh` reads both. A ledger with a second line is a malformed
+spec, not a bigger one: stop and say so rather than picking a row to build.
 
 Each phase is built with **zero inherited session context**: interactively by a fresh
 implementer subagent briefed from the phase text plus the interfaces earlier phases produced,
@@ -205,8 +206,8 @@ fresh session and the prompt names the step; run only that step, push, and write
    Critical and High finding — one fix wave max, one scoped re-review, then adjudicate
    residuals. Commit the fixes.
 3. **Delivery ledger + archival**: run `/archive-spec <spec-file>`. It ticks this branch's unit
-   and, with every unit ticked, archives the spec into `.ai/specs/implemented/` in this same PR;
-   with a unit still owed, only the tick is committed. Nothing archives specs on merge.
+   and archives the spec into `.ai/specs/implemented/` in this same PR. Nothing archives specs on
+   merge.
 4. Push: `git push -u origin $(git rev-parse --abbrev-ref HEAD)`.
 5. Interactively, open the PR via `/open-pr`. Under the loop, **do not**: the loop opens it
    after re-running the gates itself. Write `OK` to the sentinel and exit.
@@ -245,9 +246,7 @@ After all phases:
 ```
 ✅ All phases complete on branch `feat-<slug>`.
    Final whole-branch code review: {clean | {count} parked minor findings}
-   Delivery: {done}/{total} units ticked
-             {spec archived to .ai/specs/implemented/
-              | spec stays open, still owed: {unit} — `{branch}`}
+   Delivery: PR 1 ticked — spec archived to .ai/specs/implemented/
    Next step: /open-pr
 
    Cleanup after merge:
