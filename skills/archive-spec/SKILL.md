@@ -1,6 +1,6 @@
 ---
 name: archive-spec
-description: "Tick the current branch's unit in a spec's Delivery ledger and move the spec to .ai/specs/implemented/ only when no unit is left unticked. Triggers on \"archive spec\", \"archive the spec\", \"is this the last PR of the spec\"."
+description: "Tick the current branch's unit in a spec's Delivery ledger and move the spec to .ai/specs/implemented/. A spec is one unit, so the branch that ticks it is the one that archives it. Triggers on \"archive spec\", \"archive the spec\", \"is this the last PR of the spec\"."
 ---
 
 # Archive Spec
@@ -10,17 +10,19 @@ description: "Tick the current branch's unit in a spec's Delivery ledger and mov
 > **Names.** The engine's skills are invoked as `/engineering-loop:<name>`; a bare `/<name>` in this
 > text means that one, never a host skill sharing the name.
 
-Decide whether the branch about to become a PR is the spec's **last** delivery unit, and archive the
-spec into `.ai/specs/implemented/` when — and only when — it is.
+Tick this branch's unit in the spec's ledger and archive the spec into `.ai/specs/implemented/`.
 
-The spec file itself is the ledger that records which units are built, because it is the one artefact
+**A spec is exactly one delivery unit**, so the branch that ticks it is always the branch that
+archives it — there is no "is this the last one?" to decide. The count in step 5 is a check that the
+ledger is well formed, not a fork in the flow.
+
+The spec file itself is the ledger that records that the unit is built, because it is the one artefact
 that travels to `main` with the PR. No CI job archives specs; archival is a commit on the delivery PR,
 reviewed like any other change.
 
 ## The Delivery ledger
 
-Every spec carries a `## Delivery` section whose units are checklist lines. A spec is one unit unless a
-deployment seam forces a second:
+Every spec carries a `## Delivery` section holding **exactly one** checklist line:
 
 ```markdown
 ## Delivery
@@ -31,8 +33,8 @@ deployment seam forces a second:
 - `- [x]` — the unit is built and its PR is open or merged, or lands with the PR being opened right now.
 - `- [ ]` — the unit is still owed.
 
-A unit's backticked name — the one directly after its `**PR N**` label — is its branch, and that is
-what binds a unit to a branch. Read it, never guess it. `<loop>/parse-ledger.sh` applies this rule,
+The unit's backticked name — the one directly after its `**PR 1**` label — is its branch, and that is
+what binds the unit to a branch. Read it, never guess it. `<loop>/parse-ledger.sh` applies this rule,
 which is why the steps below call it rather than matching backticks by hand.
 
 ## Workflow
@@ -50,17 +52,22 @@ which is why the steps below call it rather than matching backticks by hand.
 
 3. **Read the ledger.** Extract the units:
    ```sh
-   <loop>/parse-ledger.sh "$SPEC"        # done|unit|branch, one row per unit
+   <loop>/parse-ledger.sh "$SPEC"        # done|unit|branch — one row, always
    ```
-   **Exit 3** means the ledger is malformed or the spec has no `## Delivery` section. Do not assume it
-   is single-unit. Stop and ask the user how many delivery units the spec has, add the ledger, and
-   continue.
+   **Exit 3** means the ledger is malformed or the spec has no `## Delivery` section. Do not write one
+   from guesswork: stop, show the user what the section looks like, and ask them to fix it.
 
-4. **Tick this branch's unit.** Find the unticked row whose **`branch` field** equals the current
-   branch and rewrite that line's `- [ ]` to `- [x]`. Then:
+   **More than one row** is a malformed spec too, and the more damaging kind — nothing builds a
+   two-unit ledger, `<loop>/delivery-loop.sh` refuses it before it starts. Stop and say so: the spec
+   should have been cut to the unit that merges first, with the rest deferred to its own spec
+   (`../spec-writing/references/delivery-units.md`). Do not tick a row and carry on as if the flow
+   were normal.
+
+4. **Tick this branch's unit.** The row's **`branch` field** must equal the current branch; rewrite
+   that line's `- [ ]` to `- [x]`. Then:
    - Already ticked → the unit is already recorded; leave it and carry on to step 5.
-   - The branch is named by **no** line → stop and ask. Either the ledger is stale or this branch is not a
-     delivery unit of this spec. Never invent a unit and never tick an arbitrary one.
+   - The row names a **different** branch → stop and ask. Either the ledger is stale or this branch is
+     not this spec's delivery unit. Never invent a unit and never tick one whose branch is not yours.
 
    Write the tick as `- [x] … — est ~N`, leaving the estimate in place. The delivery loop rewrites
    that same line afterwards with the realised measurements from `<loop>/unit-size.sh` and the PR
@@ -70,12 +77,13 @@ which is why the steps below call it rather than matching backticks by hand.
    ```sh
    <loop>/parse-ledger.sh "$SPEC" | grep -c '^ |' || true
    ```
-   - **Greater than zero → do not archive.** Commit the ticked ledger, report the units still owed, and
-     stop. The spec stays in `.ai/specs/` where the next branch will find it.
-   - **Zero → archive.** Continue to step 6.
+   - **Zero → archive.** This is the only outcome a well-formed spec reaches. Continue to step 6.
+   - **Greater than zero → stop, do not archive and do not commit.** With one unit ticked in step 4
+     this cannot happen, so it means the ledger holds a row step 4 did not see. Report it as the
+     malformed ledger of step 3 and leave the spec where it is.
 
 6. **Close the spec out** before moving it:
-   - Append a `## Changelog` row: `| {YYYY-MM-DD} | Implemented — PR N of N, spec archived. |`
+   - Append a `## Changelog` row: `| {YYYY-MM-DD} | Implemented — delivery unit built, spec archived. |`
    - Fill the **Final Compliance Report** if it is still a placeholder (see
      `../spec-writing/references/compliance-gate.md`).
 
@@ -98,10 +106,8 @@ which is why the steps below call it rather than matching backticks by hand.
    ```sh
    git add -A .ai/specs
    git add {the files repointed in step 8}
-   git commit -m "chore(specs): archive {slug} — last delivery unit"
+   git commit -m "chore(specs): archive {slug} — delivery unit built"
    ```
-   When step 5 said "do not archive", the message is instead
-   `chore(specs): tick delivery unit {N} for {slug}`.
 
 ## Output
 
@@ -109,19 +115,17 @@ Archived:
 
 ```
 ✅ Spec archived: .ai/specs/implemented/{file}.md
-   Delivery: {N}/{N} units ticked — this branch was the last.
+   Delivery: PR 1 ticked — `{branch}`.
    References repointed: {count} file(s)
    Committed: {sha7}
 ```
 
-Not archived:
+Not archived — the ledger is malformed, and nothing was committed:
 
 ```
 ⏸  Spec stays open: .ai/specs/{file}.md
-   Delivery: {done}/{total} units ticked (this branch = PR {N}).
-   Still owed:
-     - PR {M} — `{branch}` — {scope}
-   Committed: {sha7}  (ledger tick only)
+   Delivery: the ledger holds {N} lines; a spec is one delivery unit.
+   Cut it to the unit that merges first and defer the rest to its own spec.
 ```
 
 ## Rules
@@ -129,6 +133,8 @@ Not archived:
 - **Never** archive a spec with an unticked unit. That is the whole point of the skill: archival driven
   by a merge event cannot see past the merging PR.
 - **Never** tick a unit for work that is not on the branch. The ledger is a claim about `main`.
+- **Never** repair a multi-line ledger by ticking your row and archiving anyway. A second line means
+  the spec was written wrong; say so and stop.
 - **Never** hand-move a spec with `mv` — `git mv` is what keeps the file's history.
 - **Never** archive from `main`.
 - **Never** touch the `## Progress` phase checklist here. Phases are ticked by the session that

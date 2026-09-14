@@ -118,10 +118,18 @@ common case, not the exception.
 
    **Ask about the product, never about the delivery mechanics.** How the work is
    cut, how many PRs it becomes — none of these are questions for the user. The
-   answer is fixed: **one unit**, phases as commits, one PR. A deployment seam can
-   force a second (a migration that must land and settle before its reader; a
-   contract another team is waiting on) — that is a fact you establish from the
-   work, state in the ledger, and mention in your Phase A report. It is not a menu.
+   answer is fixed and has no exception: **one spec, one unit**, phases as commits,
+   one PR.
+
+   **A deployment seam shrinks the scope of this run; it never adds a unit.** When
+   the work has one — a migration that must land and settle before its reader, a
+   contract another team is waiting on, a mitigation that must precede the feature
+   it protects (`/spec-writing`'s `references/delivery-units.md` has the four) — this
+   `/ship` covers **only the part that merges first**, whole and standing on its own.
+   The remainder is **deferred to another `/ship` run**, after this one merges, on a
+   `main` that then contains it. Say so in the spec's TLDR as a `**Deferred:**` line,
+   and say so again in the Phase A report so the user knows a second run is coming.
+   This is a fact you establish from the work, not a menu.
 2. **Worktree.** `/new-feature feat-<slug>`. This is the branch the loop builds
    on and the tree it builds in — no suffix, and no second worktree later.
 3. **Draft.** `/engineering-loop:spec-writing`, **always the engine's**, even when the host has
@@ -133,7 +141,7 @@ common case, not the exception.
    skill wrote the spec and why. A host spec skill never replaces this step.
 
    Three things the loop reads: the `## Delivery`
-   ledger — **one unit**, whose backticked branch must be **this** branch; the
+   ledger — **exactly one line**, whose backticked branch must be **this** branch; the
    phase checklist under `## Progress`, which is what the loop hands to each
    session and checks when it exits; and the `## Gates` section, the host's own
    validation commands derived from its `AGENTS.md` / `CLAUDE.md` for this spec,
@@ -157,7 +165,9 @@ common case, not the exception.
    the unit's one PR, beside the code.
 7. **STOP and wait for the user's OK.** Report the ledger, the phase list and the
    audit verdict, name the worktree, and say plainly that nothing is built yet.
-   **Nothing runs until they say so** — not the dry run, not the loop.
+   **Nothing runs until they say so** — not the dry run, not the loop. When a seam
+   deferred part of the work, say that too, in one line: what this run does **not**
+   cover, and that it is a second `/ship` once this PR merges.
 
 Nothing gates on lines: `<loop>/unit-size.sh` reports and always exits 0. What
 bounds a session is the phase it is given.
@@ -223,10 +233,15 @@ bounds a session is the phase it is given.
    tail -f -n +1 <log> | grep --line-buffered '^delivery-loop: '
    ```
    `--line-buffered` is not optional: without it grep holds matches in its buffer and
-   the events arrive in clumps or not at all. If your harness has no event watch, fall
-   back to one background command that sleeps ten minutes and prints
-   `grep '^delivery-loop: ' <log> | tail -1`, re-armed on each wake — the old way, and
-   worse only in what it costs the host.
+   the events arrive in clumps or not at all.
+
+   **Only if your harness has no event watch at all** is there a fallback: one
+   background command that sleeps ten minutes and prints
+   `grep '^delivery-loop: ' <log> | tail -1`, re-armed on each wake. It is the old
+   way and it is worse — it holds a background process for the whole build, and on a
+   loaded host those are reclaimed first. Never choose it over an event watch you
+   have, and never announce it: the user asked for a feature, not for your polling
+   interval.
 
    **Losing the watch is not losing the run.** If the stream stops, say nothing about
    it and re-arm it; the log on disk is the record and the supervisor is still
@@ -378,12 +393,19 @@ to that work.
 - **Never** open a PR for the spec, and never put it on a branch of its own. It is
   the unit's first commit and ships in the unit's one PR.
 - **Never** skip the `--dry-run`.
-- **Never** wait on a monitor or a `tail -F` alone. The sleeping timer that exits is
-  what wakes you; a run reported late is a run the user believes is hung.
+- **Never** own a ten-minute timer when your harness has an event watch, and never
+  narrate the watching either way. The detached supervisor is what keeps the run
+  alive, so a watch that dies costs nothing and a timer buys nothing.
 - **Never** resolve a conflict with `--ours`/`--theirs`, and never rebase and force-push
   a unit's branch: merge `origin/main` into it, so the history the review saw stands.
 - **Never** merge anything on the user's behalf. Both gates are theirs.
 - **Never** open a PR per phase. The phases are commits on one branch behind one PR.
+- **Never** write a spec with two units, and never build one by hand when something
+  refuses it. A refusal from `delivery-loop.sh` or `launch.sh` — a ledger it will not
+  take, a dirty tree, a missing gate — is a stop-and-report, never a cue to implement
+  the phase yourself in this chat. Building it here defeats the whole point: no fresh
+  session per phase, no gates the loop re-runs, no telemetry, and a context that runs
+  out mid-feature. Fix the spec and start the loop.
 - **Never** retry an escalated unit without reading the persisted JSON first.
 - **Never** report a run as verified without saying whether the gates actually
   ran. Under `LOOP_SANDBOX=1` pre-flight refuses when the container cannot reach

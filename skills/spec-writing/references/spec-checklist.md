@@ -12,7 +12,7 @@
 - [ ] Each phase has a `### Phase N — title` section under `## Phasing`, and its `- **Skills:**` line names the host skills its deliverables call for — each resolving to a skill the host has — or is absent because none applies
 - [ ] `## Gates` present: one backticked command per line, each a validation command the host's docs name, in their order; `_Cleanup:_` / `_Excludes:_` / `_Denials:_` only where the docs give a basis
 - [ ] Every unit leaves `main` deployable **when merged in ledger order** — no half-wired feature, no reader without its migration
-- [ ] A second unit names a real deployment seam and its required merge order
+- [ ] The `## Delivery` ledger is exactly one line; any deferred work names its seam in the TLDR
 - [ ] Changelog section present
 
 ## 2. Architecture

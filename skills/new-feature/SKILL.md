@@ -14,7 +14,7 @@ Spin up an isolated worktree from `main` so the feature has its own branch and w
 >
 > **`/ship` and the delivery loop are the exception, and it is not cosmetic.** There the spec ships as its own PR on `feat-<slug>-spec` and is merged before anything is built, because the loop creates the build worktree from `main` itself and copies in nothing but `settings.local.json` — a spec that is not on `main` is not in the worktree, and the session is told to implement a file that does not exist. The loop does not call this skill.
 >
-> Building a later unit of a spec whose ledger declares a deployment seam? Name this branch exactly as its `## Delivery` line does; the ledger binds units to branch names. Re-verify the spec's **Current State** section before implementing — `main` has moved since the previous unit merged.
+> **A spec is exactly one delivery unit**, so a branch is a whole spec — there is no "unit 2" of anything. Building the follow-up spec that a deployment seam deferred? It is a new spec, written now against the `main` its predecessor merged into, not one drafted earlier: start it here like any other feature, and read the predecessor in `.ai/specs/implemented/` for what it actually built.
 
 ## Method
 
