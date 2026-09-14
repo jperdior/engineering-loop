@@ -381,6 +381,8 @@ to that work.
 | "the closing step … ran with N phase(s) still unticked" | a closing session ran with work still owed |
 | "the archive step wrote OK but … is not ticked" | `/archive-spec` did not tick the ledger line |
 | "the ## Progress checklist no longer parses" | a session broke the checklist it was told to tick |
+| "the session deleted ## … from the spec" | a session rewriting its handover notes truncated the spec's tail; the sections after `## Progress` are gone |
+| "the session changed the ## Gates section" | a session edited the contract instead of satisfying it |
 | still not finished after `MAX_SESSIONS` | it is not converging — the spec is probably contradictory |
 | a closed, unmerged PR | a human rejected the unit |
 | a `LOOP_GATES` command red | the loop's own gate, on the host, not the session's claim |

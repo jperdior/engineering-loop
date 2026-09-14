@@ -25,6 +25,9 @@
 #   okphase        a phase session that writes OK, which only the closing session may
 #   continueclose  the archive step writes CONTINUE instead of OK
 #   notebox        the archive step leaves an unlabelled checkbox under ## Progress
+#   truncate       a phase session that rewrites its notes by cutting the spec from _Notes:_ to EOF,
+#                  taking ## Gates and everything after it with them  (the real-world regression)
+#   regate         a phase session that edits a gate command instead of getting it green
 #   quota          one session is refused for the account's usage limit: by default the second, the
 #                  way a limit lands mid-run, or the LOOP_TEST_QUOTA_AT-th when a case needs the
 #                  refusal to land on a closing step instead
@@ -174,6 +177,17 @@ if [ -n "$phase" ]; then
     awk -v p="$phase" '
         $0 ~ "^- \\[ \\] \\*\\*" p "\\*\\*" { sub(/^- \[ \]/, "- [x]") }
         { print }' "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
+  fi
+  # `truncate` is the session that read "rewrite the notes beneath the checklist" as "replace
+  # everything from _Notes:_ down". The checklist above it still parses, which is what made the
+  # real failure silent: only the sections the loop reads LATER are gone.
+  if [ "$mode" = truncate ] && [ -f "$spec" ]; then
+    awk '/^_Notes:_/ { print "_Notes:_ phase done."; exit } { print }' \
+      "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
+  fi
+  # `regate` is the quieter one: the gate stays declared, but it is not the gate pre-flight read.
+  if [ "$mode" = regate ] && [ -f "$spec" ]; then
+    awk '{ sub(/^- `make lint`$/, "- `true`"); print }' "$spec" > "$spec.tmp" && mv "$spec.tmp" "$spec"
   fi
 elif [ "$step" != archive ]; then
   # The docs and review steps leave a commit each, so the order of the closing steps is on the branch.

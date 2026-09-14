@@ -643,6 +643,32 @@ if [ "$rc" = 4 ] && grep -q "no longer parses" "$TMP/err" \
    && [ ! -f "$(statedir)/telemetry/fixture/PR-1.md" ]; then pass
 else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
 
+# The spec is the unit's contract, and the session told to rewrite its handover notes is one sloppy
+# range away from deleting it. A run in the wild lost ## Gates and the four sections after it that
+# way: the checklist above the notes still parsed, so the loop carried on to the end of the unit,
+# and every LATER invocation was refused by pre-flight for a spec that now declared no gates.
+CASE="a phase session that truncates the spec's tail escalates, naming what it deleted"
+fresh truncspec
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=truncate; run_loop ); rc=$?
+set -e
+if [ "$rc" = 4 ] && grep -q "deleted ## Gates" "$TMP/err" && [ "$(sessions feat-one)" = 1 ] \
+   && [ ! -f "$(statedir)/telemetry/fixture/PR-1.md" ]; then pass
+else fail "exit $rc, sessions=$(sessions feat-one): $(tail -2 "$TMP/err")"; fi
+
+# Deleting the gates is the loud version. The quiet one is a session that cannot get a gate green
+# and edits the line instead: the loop runs the gates it cached at pre-flight, so the weakened
+# contract would never be read again and the unit would report clean against a gate nobody chose.
+CASE="a phase session that edits the ## Gates section escalates"
+fresh regate
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=regate; run_loop ); rc=$?
+set -e
+if [ "$rc" = 4 ] && grep -q "changed the ## Gates" "$TMP/err" && [ "$(sessions feat-one)" = 1 ]; then pass
+else fail "exit $rc, sessions=$(sessions feat-one): $(tail -2 "$TMP/err")"; fi
+
 CASE="a denial reports as a denial, not as a missing sentinel"
 fresh denialmsg
 set +e

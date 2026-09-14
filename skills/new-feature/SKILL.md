@@ -12,7 +12,7 @@ Spin up an isolated worktree from `main` so the feature has its own branch and w
 
 > **A feature is one worktree, one branch, one PR.** Driven by hand, that worktree carries the spec and its implementation together.
 >
-> **`/ship` and the delivery loop are the exception, and it is not cosmetic.** There the spec ships as its own PR on `feat-<slug>-spec` and is merged before anything is built, because the loop creates the build worktree from `main` itself and copies in nothing but `settings.local.json` — a spec that is not on `main` is not in the worktree, and the session is told to implement a file that does not exist. The loop does not call this skill.
+> **`/ship` and the delivery loop use the same worktree, and never a second one.** There the spec is committed on `feat-<slug>` as the branch's first commit and reaches `main` in the unit's one PR, beside the code it describes — there is no spec-only PR and no `-spec` branch. The loop builds **in place** in the worktree this skill created, so the spec is already on the branch every session reads. The loop does not call this skill.
 >
 > **A spec is exactly one delivery unit**, so a branch is a whole spec — there is no "unit 2" of anything. Building the follow-up spec that a deployment seam deferred? It is a new spec, written now against the `main` its predecessor merged into, not one drafted earlier: start it here like any other feature, and read the predecessor in `.ai/specs/implemented/` for what it actually built.
 
@@ -57,8 +57,8 @@ Worktree ready on branch `feat-<name>`.
 Path: .claude/worktrees/feat-<name>
 
 Next steps:
-1. /spec-writing                              ← draft spec locally on this branch
-2. /pre-implement-spec .ai/specs/{file}.md    ← audit the spec for gaps
-3. /implement-spec .ai/specs/{file}.md        ← implement phase by phase
-4. /open-pr                                   ← this unit's PR to main (first unit: spec + code)
+1. /engineering-loop:spec-writing                           ← draft spec locally on this branch
+2. /engineering-loop:pre-implement-spec .ai/specs/{file}.md ← audit the spec for gaps
+3. /engineering-loop:implement-spec .ai/specs/{file}.md     ← implement phase by phase
+4. /engineering-loop:open-pr                                ← this unit's PR to main (spec + code)
 ```
