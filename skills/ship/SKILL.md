@@ -395,6 +395,12 @@ to that work.
 - **Never** open a PR for the spec, and never put it on a branch of its own. It is
   the unit's first commit and ships in the unit's one PR.
 - **Never** skip the `--dry-run`.
+- **Never** poll for anything your harness notifies you about — an audit agent, a
+  reviewer, a subagent of any kind. Dispatch it and stop; the notification is the
+  wake-up. A sleep armed against it costs wall clock, tells you nothing its result
+  would not, and survives it to drain into the user's terminal later. The **one**
+  thing that ever justifies a timer is the detached loop's log in Phase B, and only
+  when your harness has no event watch to put on it.
 - **Never** own a ten-minute timer when your harness has an event watch, and never
   narrate the watching either way. The detached supervisor is what keeps the run
   alive, so a watch that dies costs nothing and a timer buys nothing.
