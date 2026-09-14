@@ -22,6 +22,12 @@ called green.
 
 - **One message, one subagent per gate.** Dispatch every gate in a single response so they run in
   parallel; one per response runs them in sequence and multiplies the wall clock.
+- **Then stop and wait to be woken.** A gate is the longest thing you dispatch — a host's test suite
+  runs for minutes — and your harness wakes you when each one returns. Never arm a sleep, a timer or
+  a background "wait for the gates" command, and never re-arm one: it adds wall clock to a wait that
+  was already going to end by itself, and the armed timers drain into the terminal afterwards. Under
+  the delivery loop this is worse than waste — a session that backgrounds its gates and waits for a
+  turn it never gets is escalated as a silent session, with its phase's work uncommitted.
 - **Evidence before the verdict.** Read each subagent's complete output. PASS means exit 0 **and**
   zero errors read in the output; a summary line, a green-looking tail or the subagent's own word is
   not evidence. A gate you did not read is a gate that did not pass.

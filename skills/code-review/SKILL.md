@@ -16,7 +16,10 @@ Where this skill needs a way of working, it takes, in order: the skill the host'
 `CLAUDE.md` routes that job to; else a skill in your own skill list that does it; else the steps here.
 
 - **One response, three reviewers and the gate.** Dispatch the reviewer agents and start the gate
-  in a single response, so they run in parallel.
+  in a single response, so they run in parallel. Then **stop**: your harness wakes you when each one
+  returns. Never arm a sleep, a timer or a background "wait for the reviewers" command, and never
+  re-arm one — polling costs wall clock, tells you nothing the arriving result would not, and leaves
+  timers draining into the terminal long after the work is done.
 - **Acting on a finding.** Verify it against the code before changing anything: open the file, read
   the line, confirm the claim. A finding that is wrong is answered with the technical reason, not
   applied to keep the peace. A suggestion nobody verified is never implemented.

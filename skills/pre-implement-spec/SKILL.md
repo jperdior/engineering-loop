@@ -37,6 +37,14 @@ before it reads the spec.
 
 For a full spec, launch these four subagents simultaneously after step 2. Do not wait for one before spawning the next. For a bounded spec, launch one subagent with Agent 1's and Agent 4's role and task.
 
+**Dispatch them, then stop.** Your harness wakes you when an agent returns — that notification is the
+only thing you wait on. **Never arm a sleep, a timer or a background "wait for the audits" command**,
+and never re-arm one: an audit agent runs two to four minutes, a polling wake tells you nothing an
+arriving result would not, and each armed timer outlives the thing it was waiting for. A session that
+queued sixty of them spent far longer waiting than the audits took, and then printed sixty completion
+lines into the user's terminal as they drained. If you have nothing to do until a result arrives, do
+nothing — that is the correct move, not an idle one.
+
 ### Agent 1 — Gap & Compliance `model: "opus"`
 **Role**: You are an expert software architect reviewing a spec against the conventions its own repository declares. Your job is to find missing pieces and internal inconsistencies before a single line of code is written.
 **Task**: Read the spec and every source file it references, then the host's root `AGENTS.md` / `CLAUDE.md` and the nearest one to each area touched. Work through `../spec-writing/references/compliance-gate.md` item by item — including its instruction to turn every host **MUST** and **Never** into a row. Enumerate every deliverable (entity, endpoint, migration, test) and verify it is clearly defined and internally consistent.
