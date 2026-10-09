@@ -84,8 +84,10 @@ is `delivery-loop: exit N` once it has finished.
 An `AGENTS.md` (or `CLAUDE.md`) that says three things. The loop reads it; you configure nothing.
 
 - **Your gates.** The commands that must be green before a PR, for example `make lint` and
-  `make test`. Every spec copies them into its `## Gates` section; every session runs them, and the
-  loop runs them once more on the host before opening the PR.
+  `make test`. Every spec copies them into its `## Gates` section; the closing review session runs
+  them once over the finished branch, and the loop runs them once more on the host before opening
+  the PR. A phase runs only its **targeted tests**, so say how to run those too (a filter flag, the
+  tests related to the changed files) — the full gates are too slow to pay for every phase.
 - **Your conventions.** Layout, naming, the rules you mark MUST and Never. A spec that breaks one is
   refused at audit.
 - **Your skills.** A table that maps kinds of task to the skills your repository has written for
@@ -145,8 +147,8 @@ The gates, the worktree cleanup and the extra denials are not settings: they com
 | `/new-feature` | a worktree on a new branch from `main` |
 | `/spec-writing` | drafts the spec: ledger, phase checklist, per-phase skills, gates |
 | `/pre-implement-spec` | audits the spec with four parallel agents |
-| `/implement-spec` | builds one phase per fresh implementer, gates after each |
-| `/run-gates` | runs the spec's gates, one subagent per gate |
+| `/implement-spec` | builds one phase per fresh implementer, targeted tests after each, full gates once before the PR |
+| `/run-gates` | runs the spec's gates, one subagent per gate, once per branch before the PR |
 | `/code-review` | reviews the whole branch against the host's conventions |
 | `/sync-context-docs` | updates the `AGENTS.md` nearest to what changed |
 | `/archive-spec` | ticks the ledger and archives the spec |

@@ -87,7 +87,9 @@ One phase is one session. Each phase has its own section, in the order and with 
   against the host's skill index (the root AGENTS.md router, else `.claude/skills/*/SKILL.md`).
   Omit the line when none applies; never leave it empty.}
 - **Read first:** {the spec sections a fresh session reads before anything else}
-- **Done when:** {the Integration Coverage rows that prove it, and the host's gates green}
+- **Done when:** {the Integration Coverage rows that prove it, as the targeted tests this phase
+  runs — named, with the host's targeted command for them. The full gates run once before the PR,
+  not here.}
 
 ### Phase 2 — {title}
 
