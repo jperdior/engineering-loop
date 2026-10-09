@@ -16,10 +16,12 @@ Where this skill needs a way of working, it takes, in order: the skill the host'
 `CLAUDE.md` routes that job to; else a skill in your own skill list that does it; else the steps here.
 
 - **One response, three reviewers and the gate.** Dispatch the reviewer agents and start the gate
-  in a single response, so they run in parallel. Then **stop**: your harness wakes you when each one
-  returns. Never arm a sleep, a timer or a background "wait for the reviewers" command, and never
-  re-arm one — polling costs wall clock, tells you nothing the arriving result would not, and leaves
-  timers draining into the terminal long after the work is done.
+  in a single response, so they run in parallel — unless the caller runs the full gates after the
+  fix wave (see the Verification Gate below), in which case dispatch the reviewers alone. Then
+  **stop**: your harness wakes you when each one returns. Never arm a sleep, a timer or a
+  background "wait for the reviewers" command, and never re-arm one — polling costs wall clock,
+  tells you nothing the arriving result would not, and leaves timers draining into the terminal
+  long after the work is done.
 - **Acting on a finding.** Verify it against the code before changing anything: open the file, read
   the line, confirm the claim. A finding that is wrong is answered with the technical reason, not
   applied to keep the peace. A suggestion nobody verified is never implemented.
@@ -105,6 +107,15 @@ Rules:
 - Every failure is a finding, even when it also fails on the base. If it fails on the branch,
   CI fails. Fix it or flag it.
 - The review output MUST include actual pass/fail evidence from `/run-gates`.
+
+**When the caller runs the full gates after the fix wave, the review starts none of its own.** A full
+gate run can cost tens of minutes, and the branch runs it **once** before the PR. `/implement-spec`'s
+closing flow and the delivery loop's review step say so when they invoke this skill: they run
+`/run-gates` after the fix wave, over the code that will actually ship. Then the review is static,
+each fix in the wave is proved by the targeted tests it reaches (the host's targeted test commands,
+as its `AGENTS.md` / `CLAUDE.md` documents them), and the Verification table carries the caller's
+`/run-gates` result. Any other invocation — a review of a branch on its own — runs the gate as
+above.
 
 ## Output Format
 

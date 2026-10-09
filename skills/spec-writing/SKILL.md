@@ -80,7 +80,7 @@ analysis and 2-3 alternative designs with trade-offs.
 5. **Apply answers**: remove the Open Questions block and fill the skeleton.
 6. **Research**: when relevant, compare against open-source leaders, RFCs, or the framework's own recipes. Quote evidence.
 7. **Design**: write the Architecture, Data Models and API Contracts sections. Name, for every unit of state the spec introduces, where it lives and which module owns it; for every endpoint, its route, its auth requirement and the exact JSON shape of its request and response; for every interaction across a boundary the host declares, the mechanism the host permits — never an import the host forbids.
-8. **Phasing and the Delivery ledger**: break delivery into testable phases. Each phase ends with the host's gates green and a working app. Define phases at a granularity that is independently reviewable and leaves the app in a valid state at each checkpoint.
+8. **Phasing and the Delivery ledger**: break delivery into testable phases. Each phase ends with its **targeted tests** green and a working app — its `Done when` names those tests (the ones the phase adds and the existing ones its change reaches), run through the host's targeted test commands as its `AGENTS.md` / `CLAUDE.md` documents them. The full gates run once over the whole branch, before the PR, not per phase. Define phases at a granularity that is independently reviewable and leaves the app in a valid state at each checkpoint.
 
     Write each phase as its own `### Phase N — title` section under `## Phasing`, and in it **name the
     host's skills the phase must use**, resolved against the skill index read in step 1:
@@ -180,8 +180,9 @@ analysis and 2-3 alternative designs with trade-offs.
     directory); `_Excludes:_` the generated paths the docs say nobody reviews; `_Denials:_` the
     commands the docs mark as never run by an agent, as Claude Code permission patterns. Omit a line
     the docs give no basis for. Only commands the docs name — never a guess and never a default.
-    `<loop>/parse-ledger.sh <spec> --gates` reads the list; the loop runs it in every session and once
-    more on the host, and refuses a spec that declares none. This is why nothing about the host is
+    `<loop>/parse-ledger.sh <spec> --gates` reads the list; it is the PR's contract, so it runs once
+    over the finished branch — in the closing review session, after its fix wave — and once more on
+    the host before the PR, never per phase; the loop refuses a spec that declares none. This is why nothing about the host is
     configured in a file for the loop's sake: the contract is re-derived with each spec and approved
     with it, so a change to the host's docs reaches the next feature without anyone editing config.
 

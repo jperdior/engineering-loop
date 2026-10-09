@@ -157,6 +157,7 @@ fresh() {
   : > "$LOOP_TEST_DIR/resumes.txt"
   : > "$LOOP_TEST_DIR/record-ids.txt"
   : > "$LOOP_TEST_DIR/skills.txt"
+  : > "$LOOP_TEST_DIR/gating.txt"
   : > "$LOOP_TEST_DIR/denials.txt"
   : > "$LOOP_TEST_DIR/make-targets.txt"
 }
@@ -312,6 +313,17 @@ if grep -qx 'Phase 1|scaffold-port, port-tests' "$LOOP_TEST_DIR/skills.txt" \
    && grep -qx 'Phase 2|' "$LOOP_TEST_DIR/skills.txt" \
    && grep -qx 'closing:docs|' "$LOOP_TEST_DIR/skills.txt"; then pass
 else fail "skills: $(tr '\n' ' ' < "$LOOP_TEST_DIR/skills.txt")"; fi
+
+# A full gate run costs tens of minutes, so it runs once before the PR, not once per phase: a phase
+# session is told its targeted tests, the review step is told the full gates, and no other closing
+# step is. The loop's own host-side run before the PR is asserted with the gates further down.
+CASE="phases run targeted tests; the full gates run once, in the review step"
+if [ "$(grep -c '^Phase [0-9]*|targeted$' "$LOOP_TEST_DIR/gating.txt")" = 3 ] \
+   && ! grep -q '^Phase [0-9]*|full$' "$LOOP_TEST_DIR/gating.txt" \
+   && grep -qx 'closing:review|full' "$LOOP_TEST_DIR/gating.txt" \
+   && grep -qx 'closing:docs|targeted' "$LOOP_TEST_DIR/gating.txt" \
+   && grep -qx 'closing:archive|targeted' "$LOOP_TEST_DIR/gating.txt"; then pass
+else fail "gating: $(tr '\n' ' ' < "$LOOP_TEST_DIR/gating.txt")"; fi
 
 # A resumed run must not take the branch TIP as the base, or the closing review sees only the
 # phases built in the second invocation.

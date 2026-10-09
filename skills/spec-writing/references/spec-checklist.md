@@ -5,7 +5,7 @@
 - [ ] Filename matches `{YYYY-MM-DD}-{kebab-case-title}.md`
 - [ ] TLDR present, 2-3 sentences
 - [ ] Open Questions block cleared before the research phase
-- [ ] Phases declared; each phase deliverable is testable and ends with the host's gates green
+- [ ] Phases declared; each phase deliverable is testable and its `Done when` names the targeted tests that prove it (the full gates run once before the PR)
 - [ ] `## Delivery` ledger present; **one** unit on one line, naming its branch first in backticks
 - [ ] `## Progress` present, opening with one `- [ ] **Phase N** — title` line per phase, in the order and with the titles of `## Phasing`
 - [ ] Every unindented checkbox under `## Progress` is a phase line; notes are prose under `_Notes:_`

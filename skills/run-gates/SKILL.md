@@ -18,6 +18,14 @@ themselves.
 gates are independent, so they run in **parallel** and each is read to completion before it is
 called green.
 
+**When it runs: once per branch, before the PR.** The full gates are the PR's contract, and a run
+can cost tens of minutes, so they are not a per-phase check. A spec phase, and every fix round
+inside one, is proved by its **targeted tests** — the tests the phase names and the ones its change
+reaches, through the host's targeted test commands as its `AGENTS.md` / `CLAUDE.md` documents them.
+`/implement-spec` and the delivery loop's review step invoke this skill once, after the whole-branch
+code review's fix wave; the loop then re-runs the same gates on the host before it opens the PR. A
+branch with no spec — a hotfix, a review — runs it once before its PR too.
+
 ## Method
 
 - **One message, one subagent per gate.** Dispatch every gate in a single response so they run in
@@ -79,8 +87,7 @@ gated. Do not use it to skip a gate.
 
 Each subagent runs with `model: "haiku"` and is told: run **exactly one** command, from the
 repository root, read its COMPLETE output, and return `PASS` or `FAIL` with the command name
-and, on failure, the failing lines. Nothing in that needs a larger model, and the gate runs on
-every phase.
+and, on failure, the failing lines. Nothing in that needs a larger model.
 
 Never merge two commands into one subagent, and never run a gate yourself in the controller
 session — one command, one agent, one verdict.
