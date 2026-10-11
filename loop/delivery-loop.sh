@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build a spec's delivery unit unattended: one fresh `claude -p` per spec phase, on one branch, then
-# three closing sessions (context docs, code review, archive), then one PR. The loop never merges; a
-# human merges the PR.
+# Build a spec's delivery unit unattended: one fresh `claude -p` per spec phase, on one branch, each
+# proved by the targeted tests its phase reaches; then three closing sessions (context docs, code
+# review with the one in-session run of the full gates, archive); then the gates once more on the
+# host, then one PR. The loop never merges; a human merges the PR.
 #
 # Usage:
 #   delivery-loop.sh <spec-file> [--dry-run] [--force-unlock]
@@ -290,8 +291,8 @@ UNIT_BASE=""
 PHASE_COUNT=0
 
 # Once every phase is ticked, the unit is closed by these steps, in this order, each in its own
-# session: the context docs, the whole-branch code review with its fix wave, the ledger tick and
-# archive. Only the archive step leaves proof on the branch (the ticked ledger line), so a run that
+# session: the context docs, the whole-branch code review with its fix wave and the one in-session
+# run of the full gates, the ledger tick and archive. Only the archive step leaves proof on the branch (the ticked ledger line), so a run that
 # resumes with all phases ticked and the ledger unticked runs the three steps again. The docs sync
 # and the review are idempotent, and a repeat costs one crash, not a marker the spec grammar lacks.
 CLOSING_STEPS="docs review archive"
@@ -1306,9 +1307,12 @@ $(resolve_block)
 
 You are the implementer of this phase -- do not dispatch an implementer subagent. Follow
 /engineering-loop:implement-spec's rules for a loop-driven session: the failing test first, then
-the code, then /engineering-loop:sync-context-docs and /engineering-loop:run-gates $UNIT_BASE with
-every in-scope gate green. Build nothing from any other phase, however small it looks; the next
-session gets the next phase.
+the code, then /engineering-loop:sync-context-docs and the phase's TARGETED tests green -- the tests
+its section's "Done when" names and the ones its change reaches, through the targeted test commands
+the host's AGENTS.md / CLAUDE.md documents, run in the foreground and read to the end. Do NOT run
+the spec's full gates: they run once, in the closing review, and again on the host before the PR.
+A fix round re-runs the failing tests, not the gates. Build nothing from any other phase, however
+small it looks; the next session gets the next phase.
 
 Then, in this order:
   1. commit, exactly one commit for the code:  feat(<scope>): $phase — $title (spec: $spec)
@@ -1325,10 +1329,10 @@ Before exiting, write exactly one line to this file
   $status_file
 That line is one of:
   CONTINUE $branch <the sha you pushed> $RUN_ID
-                              this phase is built, gated, ticked and pushed; the next session
+                              this phase is built, tested, ticked and pushed; the next session
                               takes the next phase
   ESCALATE:<one-line reason>  for anything else - a failed precondition, a contradiction in the
-                              spec, a gate you could not turn green, or any question you would
+                              spec, a test you could not turn green, or any question you would
                               otherwise ask a human.
 Never write OK: that line belongs to the closing session. Never leave the file unwritten; a
 missing file is treated as an escalation.
@@ -1347,13 +1351,16 @@ is still what you report.
 BLOCK
     ;;
     review) cat <<BLOCK
-Your step: the code review. The docs are already synced. Run /engineering-loop:code-review
-over
+Your step: the code review and the one full gate run. The docs are already synced. Run
+/engineering-loop:code-review over
   git diff \$(git merge-base "$UNIT_BASE" HEAD)...HEAD
-with the reviewers on opus. Resolve every Critical and High finding in one fix wave; commit and
-push it. Then /engineering-loop:run-gates $UNIT_BASE in the foreground until every in-scope gate
-is green, and one scoped re-review of the fix diff; commit and push. A finding you cannot resolve
-without a human is an ESCALATE, not a note in the PR.
+with the reviewers on opus, telling it the full gates run after its fix wave, so it starts none of
+its own. Resolve every Critical and High finding in one fix wave, proving each fix with the targeted
+tests it reaches; commit and push it. Then one scoped re-review of the fix diff, and then
+/engineering-loop:run-gates $UNIT_BASE in the foreground: the spec's full gates, once, over the
+finished branch -- the phases ran only their targeted tests. Every gate must be green; a red one is
+fixed, its targeted tests re-run, and the full gates run again. Commit and push. A finding or a
+gate you cannot resolve without a human is an ESCALATE, not a note in the PR.
 
 The fix wave edits the unit's own code and tests. A finding against a host skill, an AGENTS.md or
 another doc beyond what the spec names is written into the review as a proposal and left alone:
@@ -1419,7 +1426,7 @@ continuation_prompt() {
     what="Phase:  $phase — $title"
     doing="building $phase of $unit"
     word="CONTINUE"
-    meaning="this phase is built, gated, ticked and pushed; the next session takes the next phase"
+    meaning="this phase is built, tested, ticked and pushed; the next session takes the next phase"
   else
     what="Step:   $step"
     doing="running the closing step '$step' of $unit"
@@ -1881,8 +1888,8 @@ verify_session() {
   fi
 
   # A clean exit with no sentinel is a session that ended its turn early -- it asked a question, or
-  # backgrounded its gates and waited for a next turn a headless session does not have. Its work is
-  # in the worktree and its record names its conversation; that is exactly the state a re-run
+  # backgrounded its tests or gates and waited for a next turn a headless session does not have. Its
+  # work is in the worktree and its record names its conversation; that is exactly the state a re-run
   # resumes, so the loop resumes it itself, once. A kill leaves no JSON and is not this case.
   if [ ! -f "$status_file" ]; then
     if [ -s "$json_file" ] && [ -f "$UNIT_DIR/session" ] \
@@ -2261,9 +2268,9 @@ if ! resume_decision; then
   exit 4
 fi
 
-# One phase per session, as many sessions as there are phases, then one per closing step. The gates
-# run in every session on that session's work; `prove_unit` runs them once more on the host when the
-# archive step says OK.
+# One phase per session, as many sessions as there are phases, then one per closing step. A phase
+# session runs only the targeted tests its phase reaches; the full gates run once in the review step,
+# after its fix wave, and `prove_unit` runs them once more on the host when the archive step says OK.
 SESSIONS=0
 UNIT_OK=0
 PR_CONFLICTS=0

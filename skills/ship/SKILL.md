@@ -145,7 +145,8 @@ common case, not the exception.
    phase checklist under `## Progress`, which is what the loop hands to each
    session and checks when it exits; and the `## Gates` section, the host's own
    validation commands derived from its `AGENTS.md` / `CLAUDE.md` for this spec,
-   which every session runs and the loop re-runs on the host. The phases are the
+   which the closing review session runs once and the loop re-runs on the host
+   before the PR — a phase session runs only its targeted tests. The phases are the
    sessions: cut each one to what a single fresh session can read and build. Each
    phase's section names the **host's skills** it must use, resolved from the
    repository's skill index. The user reads all of it at gate 1.
@@ -283,12 +284,14 @@ bounds a session is the phase it is given.
 
    What the loop does meanwhile: one fresh `claude -p` per unticked phase in this
    worktree, on `LOOP_MODEL` (default `opus`). Each session implements its phase
-   directly, runs the spec's gates, commits, ticks the phase under `## Progress`,
-   rewrites the notes beneath the checklist, pushes and writes `CONTINUE`. The
+   directly, runs its targeted tests (never the full gates), commits, ticks the
+   phase under `## Progress`, rewrites the notes beneath the checklist, pushes and
+   writes `CONTINUE`. The
    loop reads the tick from origin — a `CONTINUE` whose phase is not ticked is an
    escalation, not progress. When no phase is left, three closing sessions run in
-   turn, each fresh: `/sync-context-docs`, then `/code-review` with its fix wave,
-   then `/archive-spec`, which writes `OK`. The loop then runs the gates
+   turn, each fresh: `/sync-context-docs`, then `/code-review` with its fix wave
+   and the one in-session `/run-gates` of the full gates, then `/archive-spec`,
+   which writes `OK`. The loop then runs the gates once more
    **itself** rather than trusting the session's report, opens one PR on
    `sonnet`, attests it on origin, and records the tick with the measurements and
    the PR number.
@@ -309,8 +312,9 @@ bounds a session is the phase it is given.
    did not see the result and offer `/code-review` on the merge before the user merges.
 
 **The gates are the spec's, and the spec's are the host's.** The `## Gates` section
-`/spec-writing` derived from the host's docs is what every session runs and what the
-loop re-runs on the host; there is no default, and pre-flight refuses a spec without
+`/spec-writing` derived from the host's docs is what the closing review session runs once
+and what the loop re-runs on the host before the PR — a phase runs only its targeted
+tests; there is no default, and pre-flight refuses a spec without
 one. `--dry-run` prints them with their source.
 
 **A usage-limit pause is a message, not a task.** When a session is refused, the log

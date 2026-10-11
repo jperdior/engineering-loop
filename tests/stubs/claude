@@ -166,6 +166,11 @@ step="$(printf '%s\n' "$prompt" | sed -n 's/^Step:[[:space:]]*//p' | head -1)"
 printf '%s|%s\n' "${phase:-closing:$step}" \
   "$(printf '%s\n' "$prompt" | sed -n 's/^Skills:[[:space:]]*//p' | head -1)" >> "$LOOP_TEST_DIR/skills.txt"
 
+# Whether the prompt asks this session for the full gates, keyed the same way, so a case can assert
+# that phases run only their targeted tests and the full gates run once, in the review step.
+if printf '%s\n' "$prompt" | grep -q 'run-gates'; then gating=full; else gating=targeted; fi
+printf '%s|%s\n' "${phase:-closing:$step}" "$gating" >> "$LOOP_TEST_DIR/gating.txt"
+
 # APPEND, ONE LINE PER SESSION, so a session that never ran is distinguishable from one that did:
 # on a shared branch an overwrite makes two sessions produce a byte-identical tree.
 printf 'session %s %s\n' "$branch" "${phase:-closing:$step}" >> "sessions-$branch.txt"

@@ -1,6 +1,6 @@
 ---
 name: implement-spec
-description: "Implement an approved spec from .ai/specs/, phase by phase — a fresh implementer per phase, the verification gate as the per-phase review rubric, and a single code review once all phases are done. Triggers on \"implement spec\", \"build from spec\", \"code the spec\", \"implement phase X\"."
+description: "Implement an approved spec from .ai/specs/, phase by phase — a fresh implementer per phase, the targeted tests as the per-phase review rubric, and a single code review and one full verification gate once all phases are done. Triggers on \"implement spec\", \"build from spec\", \"code the spec\", \"implement phase X\"."
 ---
 
 # Implement Spec
@@ -17,15 +17,16 @@ who builds it, and what the reviewer's rubric is.
 ## Two ways in
 
 **Interactive** — a human runs `/implement-spec` in a worktree. This session is the **controller**:
-it dispatches a fresh implementer subagent per phase, reviews each against the gate rubric, and
-after the last phase runs the final review, `/archive-spec` and `/open-pr`.
+it dispatches a fresh implementer subagent per phase, reviews each against the targeted-test
+rubric, and after the last phase runs the final review, the full gates once, `/archive-spec` and
+`/open-pr`.
 
 **Driven by the delivery loop** — the session's prompt names one `Phase:`. Then **this session
 is the implementer** of that one phase: it dispatches no implementer subagent, runs neither
 `/archive-spec` nor `/open-pr`, and ends by writing the sentinel the prompt names. A fresh
 process per phase is what keeps the loop's context small, and a controller-plus-implementer
-layer inside it would double the context for nothing. The per-phase rubric below is the same on
-both paths.
+layer inside it would double the context for nothing. The per-phase rubric below — targeted
+tests, never the full gates — is the same on both paths.
 
 ## Method
 
@@ -36,8 +37,9 @@ provides it; else the steps written here. Nothing outside this plugin is require
 - **Test first.** Write the failing test the phase's section names, run it and watch it fail for the
   reason expected, write the minimum code that passes, refactor with the test green. No production
   code lands before a failing test that wants it.
-- **Verify before claiming done.** Read the complete gate output. DONE means every gate exited 0
-  and you read zero errors; a summary line or a green-looking tail is not evidence.
+- **Verify before claiming done.** Read the complete output of every test or gate you ran. DONE
+  means each one exited 0 and you read zero errors; a summary line or a green-looking tail is not
+  evidence.
 - **Debug systematically** when a failure spans several files: reproduce it, read the whole
   failure, form one hypothesis, test that hypothesis before changing code, and change one thing
   at a time. Never patch the symptom to turn the gate green.
@@ -59,10 +61,19 @@ under the loop by a fresh process. Either way a phase cannot drift on half-remem
 conversation, and the record survives compaction: the spec's own `## Progress` checklist and
 `git log` are the ledger, and there is no other.
 
-**The per-phase review rubric IS the host's verification gate.** The per-phase review runs
-`/sync-context-docs` → `/run-gates` as its pass/fail criteria. `/code-review` is **not** part of
-the per-phase rubric — it runs once, over the whole branch, so review reasons about the finished
-feature instead of re-reviewing churn each phase.
+**The per-phase review rubric is the targeted tests, not the full gates.** The per-phase review
+runs `/sync-context-docs` and the tests the phase reaches as its pass/fail criteria. The full
+gates — the spec's `## Gates`, through `/run-gates` — run **once**, over the whole branch, after the
+code review's fix wave and before the PR: a full gate run can cost tens of minutes, and paying it
+per phase and per fix round multiplies that for no extra proof the final run does not give.
+`/code-review` is **not** part of the per-phase rubric either — it runs once, over the whole branch,
+so review reasons about the finished feature instead of re-reviewing churn each phase.
+
+**Targeted tests** are the tests the phase's section names in its `Done when`, plus the existing
+tests its change reaches, run through the host's own targeted commands as its `AGENTS.md` /
+`CLAUDE.md` documents them — a filter flag, a run of the tests related to the changed files, a
+single module's suite. Never the full gates. Where the host documents no targeted command, run the
+phase's named tests by the narrowest command its test runner accepts.
 
 ## Prerequisites
 
@@ -158,28 +169,33 @@ and the tree and re-dispatch the same implementer; `BLOCKED` → decide which it
 (stop, update the spec, re-run `/pre-implement-spec`, then resume at this phase). Never build the
 phase yourself in the controller session.
 
-### 3. Per-phase review — the gate IS the rubric
+### 3. Per-phase review — the targeted tests ARE the rubric
 
 Every phase must pass before its line is ticked:
 
 1. **`/sync-context-docs`** — update the docs for every directory the phase touched, and the
    spec's Changelog.
-2. **`/run-gates <base>`** — `origin/main`, or the `Base:` the loop's prompt names. It runs
-   every gate the spec's `## Gates` section declares, each as a parallel subagent. **Every gate
-   MUST report PASS.**
+2. **The targeted tests** — the tests the phase's `Done when` names and the ones its change
+   reaches, through the host's targeted commands (see above), in the foreground. **Every one MUST
+   pass**, read to the end of its output.
 
-**Do not run `/code-review` here.** It runs once over the whole branch after all phases. A gate
-failure opens the fix loop.
+**Do not run `/run-gates` or `/code-review` here.** Both run once over the whole branch after all
+phases. A targeted-test failure opens the fix loop.
 
 ### 4. Fix loop
 
 Interactively, at most **five rounds**. Rounds 1–3 resume the same implementer with the failing
-gate's complete output and nothing else added; rounds 4–5 dispatch a fresh implementer on the most
+test's complete output and nothing else added; rounds 4–5 dispatch a fresh implementer on the most
 capable model available, briefed with the phase and the failure. Every round ends with a scoped
-re-check: re-run the failing gate on the fix diff. Never fix findings yourself in the controller
-session — the implementer that has the context fixes them. At the cap, stop: report the failing
-gate, the five attempts and what each changed, and hand the decision to the user. Under the loop,
-fix and re-run the failing gate yourself; a gate you cannot turn green is an `ESCALATE`.
+re-check: re-run the failing targeted tests on the fix diff — never the full gates. Never fix
+findings yourself in the controller session — the implementer that has the context fixes them. At
+the cap, stop: report the failing test, the five attempts and what each changed, and hand the
+decision to the user. Under the loop, fix and re-run the failing tests yourself; a test you cannot
+turn green is an `ESCALATE`.
+
+The same loop, with the same cap, handles a red full gate after all phases (step 3 below): each
+round re-runs only the failing gate's targeted slice while fixing, and the full gates once more when
+the round's fix is in.
 
 ### 5. Complete the phase
 
@@ -194,22 +210,28 @@ fix and re-run the failing gate yourself; a gate you cannot turn green is an `ES
 
 ## After all phases
 
-Interactively, once every phase is ticked. Under the loop, each numbered step below is its own
-fresh session and the prompt names the step; run only that step, push, and write the sentinel:
+Interactively, once every phase is ticked. Under the loop, the steps run as three fresh sessions
+— `docs` (1), `review` (2 and 3: the review, its fix wave and the one full gate run) and `archive`
+(4 and 5) — and the prompt names the step; run only that step, push, and write the sentinel:
 
 1. **Final doc sync**: `/sync-context-docs` once more to catch anything from the last phase;
    commit doc changes.
-2. **Code review gate (once, over the whole branch)** — the *only* code review in the flow.
+2. **Code review (once, over the whole branch)** — the *only* code review in the flow.
    Package the diff with `git diff $(git merge-base "$BASE" HEAD)...HEAD` (never `HEAD~1`),
    where `$BASE` is `origin/main` or the `Base:` the loop's prompt names. Then dispatch
-   `/code-review` (reviewers on opus) over that diff, pointed at any parked lines. Resolve every
-   Critical and High finding — one fix wave max, one scoped re-review, then adjudicate
-   residuals. Commit the fixes.
-3. **Delivery ledger + archival**: run `/archive-spec <spec-file>`. It ticks this branch's unit
+   `/code-review` (reviewers on opus) over that diff, pointed at any parked lines, and tell it the
+   full gates run after its fix wave, so it starts no gate run of its own. Resolve every Critical
+   and High finding — one fix wave max, the fix rounds proved by their targeted tests, one scoped
+   re-review, then adjudicate residuals. Commit the fixes.
+3. **The full gates, once**: `/run-gates <base>` over the finished branch, in the foreground. It
+   runs every gate the spec's `## Gates` section declares, each as a parallel subagent. **Every gate
+   MUST report PASS.** This is the one full run before the PR; a red gate enters the fix loop
+   above, and its result is the review's Verification evidence.
+4. **Delivery ledger + archival**: run `/archive-spec <spec-file>`. It ticks this branch's unit
    and archives the spec into `.ai/specs/implemented/` in this same PR. Nothing archives specs on
    merge.
-4. Push: `git push -u origin $(git rev-parse --abbrev-ref HEAD)`.
-5. Interactively, open the PR via `/open-pr`. Under the loop, **do not**: the loop opens it
+5. Push: `git push -u origin $(git rev-parse --abbrev-ref HEAD)`.
+6. Interactively, open the PR via `/open-pr`. Under the loop, **do not**: the loop opens it
    after re-running the gates itself. Write `OK` to the sentinel and exit.
 
 ## Cleanup — after the PR merges
@@ -221,7 +243,8 @@ fresh session and the prompt names the step; run only that step, push, and write
 
 ## When things go wrong
 
-- A gate fails on the current phase → routes into the fix loop. When the root cause spans several
+- A targeted test fails on the current phase, or a full gate fails after all phases → routes into
+  the fix loop. When the root cause spans several
   files, debug systematically (the Method above) before touching code.
 - The spec proves wrong mid-implementation → stop, update the spec, re-run
   `/pre-implement-spec`, then resume at the current phase. Under the loop, `ESCALATE` instead:
@@ -236,7 +259,7 @@ End of each phase:
 ```
 ✅ Phase {N}: {Title}
    Files:   {count} touched, {count} tests added
-   Gates:   {N}/{N} PASS
+   Tests:   {targeted tests run} PASS
    Progress: {N}/{total} phases ticked
    Next:    Phase {N+1}: {Title} — proceed?
 ```
@@ -246,6 +269,7 @@ After all phases:
 ```
 ✅ All phases complete on branch `feat-<slug>`.
    Final whole-branch code review: {clean | {count} parked minor findings}
+   Gates:   {N}/{N} PASS (the one full run)
    Delivery: PR 1 ticked — spec archived to .ai/specs/implemented/
    Next step: /open-pr
 
