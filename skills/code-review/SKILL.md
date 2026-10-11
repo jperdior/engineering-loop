@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review code changes (PR, diff, branch, commit) against the host repository's documented conventions, security, and test quality. Runs the verification gate as part of the review. Triggers on \"code review\", \"review this PR\", \"review the diff\", \"review my branch\"."
+description: "Review code changes (PR, diff, branch, commit) against the host repository's documented conventions, security, and test quality. Runs the verification gate once, after the review and its fix wave. Triggers on \"code review\", \"review this PR\", \"review the diff\", \"review my branch\"."
 ---
 
 # Code Review
@@ -15,19 +15,22 @@ description: "Review code changes (PR, diff, branch, commit) against the host re
 Where this skill needs a way of working, it takes, in order: the skill the host's root `AGENTS.md` /
 `CLAUDE.md` routes that job to; else a skill in your own skill list that does it; else the steps here.
 
-- **One response, three reviewers and the gate.** Dispatch the reviewer agents and start the gate
-  in a single response, so they run in parallel — unless the caller runs the full gates after the
-  fix wave (see the Verification Gate below), in which case dispatch the reviewers alone. Then
-  **stop**: your harness wakes you when each one returns. Never arm a sleep, a timer or a
-  background "wait for the reviewers" command, and never re-arm one — polling costs wall clock,
-  tells you nothing the arriving result would not, and leaves timers draining into the terminal
-  long after the work is done.
+- **One response, three reviewers.** Dispatch the reviewer agents in a single response, so they
+  run in parallel. Then **stop**: your harness wakes you when each one returns. Never arm a sleep,
+  a timer or a background "wait for the reviewers" command, and never re-arm one — polling costs
+  wall clock, tells you nothing the arriving result would not, and leaves timers draining into the
+  terminal long after the work is done.
 - **Acting on a finding.** Verify it against the code before changing anything: open the file, read
   the line, confirm the claim. A finding that is wrong is answered with the technical reason, not
   applied to keep the peace. A suggestion nobody verified is never implemented.
 
+- **The gate runs once, last.** Run `/run-gates` after the review and after any fix wave it
+  triggers, never beside the reviewers: a gate run before the fixes proves a tree that no longer
+  exists, and a full gate run is the most expensive step in the flow. A review that leads to no
+  fixes runs it straight after the findings are merged.
+
 All reviewer agents run with `model: "opus"`. The main thread (current session) synthesises
-findings and runs the gate concurrently.
+findings.
 
 Review code changes against:
 - The host's documented rules — the root `AGENTS.md` / `CLAUDE.md` and the nearest one to each
@@ -36,8 +39,8 @@ Review code changes against:
 - Security and data integrity
 - Test coverage and code quality
 
-Produce categorised findings (Critical / High / Medium / Low) with `file:line`, and run the
-**verification gate** as part of the review.
+Produce categorised findings (Critical / High / Medium / Low) with `file:line`, then run the
+**verification gate** over the tree the review leaves behind.
 
 ## Workflow
 
@@ -46,16 +49,20 @@ Produce categorised findings (Critical / High / Medium / Low) with `file:line`, 
 2. **Context**: read the root `AGENTS.md` / `CLAUDE.md` and the nearest one to each changed
    directory. If the change references a spec under `.ai/specs/`, read it — including its
    Integration Coverage section.
-3. **Parallel execution**: spawn the three reviewer agents (below) **and** start the
-   verification gate **at the same time**. The agents analyse the diff statically while the
-   gate runs real checks — no need to wait for the gate before reviewing.
+3. **Parallel review**: spawn the three reviewer agents (below) in one response. They analyse
+   the diff statically; no gate runs yet.
 4. **Backward-compatibility gate**: check every change for contract-surface impact. Flag a break
    as **Critical** unless a deprecation path is provided.
 5. **Checklist**: apply [references/review-checklist.md](references/review-checklist.md). Flag
    with severity + file + line + fix.
 6. **Merge findings**: combine the reviewers' findings + the BC gate + the checklist.
    Deduplicate — the same `file:line` reported by several agents keeps the highest severity.
-7. **Output**: produce the review report in the format below.
+7. **Fix wave**, when findings call for one: apply it (one wave, verified finding by finding, as
+   **Acting on a finding** says) with only the targeted tests each fix reaches.
+8. **Verification gate**: run `/run-gates` once, over the tree as it now stands — after the fix
+   wave, or straight after step 6 when nothing was fixed. When the caller runs the full gates itself
+   after the fix wave, skip this step and report the caller's result (see Verification Gate).
+9. **Output**: produce the review report in the format below.
 
 ## Parallel Reviewer Agents
 
@@ -98,7 +105,8 @@ it; error paths handled rather than swallowed.
 
 ## Verification Gate (MANDATORY)
 
-**NEVER claim "ready to merge" without running the gate.**
+**NEVER claim "ready to merge" without running the gate.** Run it once, after the review and its
+fix wave (workflow step 8), never in parallel with the reviewers.
 
 Invoke `/run-gates`. It reads the gate commands from the spec this branch carries (`## Gates`),
 else from the host's `AGENTS.md` validation section, and dispatches each as a parallel subagent.
