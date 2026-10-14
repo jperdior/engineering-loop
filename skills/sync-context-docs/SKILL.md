@@ -1,6 +1,6 @@
 ---
 name: sync-context-docs
-description: "Update or create the AGENTS.md nearest to every directory the branch touched, so the docs describe the code as it now is. Reads from code — never from memory. Run before opening a PR. Triggers on \"sync docs\", \"update context docs\", \"sync context docs\", \"update agents\"."
+description: "Update or create the docs that govern every directory the branch touched — the nearest AGENTS.md for its rules, the host's reference docs for what each surface does — so the docs describe the code as it now is. Reads from code — never from memory. Run before opening a PR. Triggers on \"sync docs\", \"update context docs\", \"sync context docs\", \"update agents\"."
 ---
 
 # Sync Context Docs
@@ -35,6 +35,13 @@ and rewrites their docs on this branch. It runs once per phase, so the effect co
   check against the tree is a statement from memory, and this skill reads from code, never from
   memory.
 
+- **An auto-loaded doc holds rules, not reference.** An `AGENTS.md` that a `CLAUDE.md` beside it
+  imports (`@AGENTS.md`), and every `CLAUDE.md`, loads into every session that reads a file
+  beneath it — before any work starts. A section added per feature makes every later session in
+  that tree pay for it, and those files grow one feature at a time until they cost more context
+  than the work. Keep them to what every change there obeys; what one surface does, how it is
+  wired and why goes in a reference doc (Step 2).
+
 **Run this before `/open-pr`.** Every doc change on the branch must be committed before the PR
 opens.
 
@@ -57,6 +64,20 @@ Several directories usually resolve to the same doc — group them and update it
 A directory that resolves only to the root doc, and whose change is substantial enough to need
 documenting locally, gets a new `AGENTS.md` of its own. Do not create one for a change that the
 root doc already covers.
+
+**Then find where its reference lives.** Read the root `AGENTS.md` / `CLAUDE.md` for a rule that
+says where per-surface or per-feature reference goes — a docs directory, an index beside it, a
+router table naming each doc. Where it names one, the change splits in two:
+
+- **Rules** — a new Always / Never, an invariant every change here obeys, a validation command,
+  the structure tree — go in the governing `AGENTS.md`.
+- **Reference** — what a surface or feature does, how it is wired, why it is built that way —
+  goes in that surface's reference doc where the host keeps it. Update the doc if the surface has
+  one; otherwise create one and add it to every index and router the host rule names.
+
+Where the host names no such place, everything goes in the governing doc, as before — but when that
+doc is auto-loaded, write the reference as tightly as the rule allows and say in the Step 6 report
+that it is growing.
 
 ### Step 3 — Read the code, then update the doc
 
@@ -83,6 +104,8 @@ A good doc answers these without reading the code:
 7. **How is it validated?** — the commands that check it.
 
 If any of those is missing or stale for the code the branch touched, fix it before committing.
+Where the host splits rules from reference (Step 2), 3, 5 and 7 and the structure tree answer in the
+`AGENTS.md`; 1, 2 and 4 answer in the reference doc, for the surface the branch changed.
 
 ### Step 4 — Sync the docs the root doc names
 
@@ -106,14 +129,21 @@ row in whatever index or router table the root `AGENTS.md` keeps.
 
 ### Step 6 — Commit
 
-Stage and commit every doc change together:
+If the root doc names a check on these docs — a size cap, an index or citation check — run it now
+and fix what it reports. A cap failing here means reference went into an auto-loaded doc: move it
+to the surface's reference doc rather than raising the cap.
+
+Stage and commit every doc this run changed **or created**, together. A new reference doc is
+untracked, so a filter over `git diff` never sees it — list the run's docs with `git status`:
 
 ```bash
-git add $(git diff --name-only | grep -E '(AGENTS|CLAUDE)\.md$') .ai/specs/
+git status --short -- '*.md'          # every doc this run changed (M) or created (??)
+git add <each of those docs> .ai/specs/
 git commit -m "docs: sync docs after <feature-name>"
 ```
 
-Include whatever cross-cutting docs Step 4 changed.
+Stage by name, not with a wildcard: the tree can hold markdown this run did not write. Include the
+reference docs and indexes Step 2 touched and whatever cross-cutting docs Step 4 changed.
 
 ---
 
@@ -168,7 +198,8 @@ For a directory that needs its own doc and does not have one:
 \`\`\`
 ```
 
-Then create a `CLAUDE.md` beside it containing `@AGENTS.md`, if that is the host's convention.
+Then create a `CLAUDE.md` beside it containing `@AGENTS.md`, if that is the host's convention. That
+import makes the doc auto-loaded, so from then on it holds rules only (Method).
 
 ---
 
