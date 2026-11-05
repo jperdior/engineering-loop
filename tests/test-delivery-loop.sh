@@ -566,6 +566,7 @@ else fail "exit $rc resumes=$(wc -l < "$LOOP_TEST_DIR/resumes.txt") $(tail -2 "$
 escalates "an ESCALATE sentinel escalates"               LOOP_TEST_CLAUDE=escalate
 escalates "a permission denial escalates"                LOOP_TEST_CLAUDE=denied
 escalates "denials are named even with no sentinel"      LOOP_TEST_CLAUDE=denied-silent
+escalates "a denied action escalates beside a denied read" LOOP_TEST_CLAUDE=deniedwrite
 escalates "is_error true with subtype success escalates" LOOP_TEST_CLAUDE=apierror
 escalates "a sentinel naming another run escalates"      LOOP_TEST_CLAUDE=stale
 escalates "gates that stay red escalate"                 LOOP_TEST_MAKE=fail
@@ -680,6 +681,18 @@ set +e
 set -e
 if [ "$rc" = 4 ] && grep -q "changed the ## Gates" "$TMP/err" && [ "$(sessions feat-one)" = 1 ]; then pass
 else fail "exit $rc, sessions=$(sessions feat-one): $(tail -2 "$TMP/err")"; fi
+
+# A hook that keeps whole large files out of the context denies Read and `cat`. The session reads
+# another way and hands over; that is not a failure.
+CASE="denied reads in a finished session do not escalate"
+fresh deniedread
+set +e
+# shellcheck disable=SC2030,SC2031
+( export LOOP_TEST_CLAUDE=deniedread; run_loop ); rc=$?
+set -e
+if [ "$rc" = 0 ] && grep -q "denied reads only" "$TMP/out" \
+   && [ -f "$(statedir)/telemetry/fixture/PR-1.md" ]; then pass
+else fail "exit $rc: $(tail -2 "$TMP/err")"; fi
 
 CASE="a denial reports as a denial, not as a missing sentinel"
 fresh denialmsg

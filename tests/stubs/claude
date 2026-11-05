@@ -18,6 +18,8 @@
 #                  (backgrounded its gates and ended its turn; given the turn back, it finishes)
 #   escalate       write ESCALATE:<reason>
 #   denied         do the job, report a permission denial
+#   deniedread     do the job, report denied READS only (a Read and a `cat`)   (a large-file hook)
+#   deniedwrite    do the job, report a denied read AND a denied `make deploy`
 #   denied-silent  write NOTHING, report a permission denial                  (Write was denied)
 #   apierror       report is_error true alongside subtype "success"
 #   stale          write a sentinel carrying a previous run's id
@@ -261,6 +263,8 @@ success_json='{"is_error":false,"subtype":"success","permission_denials":[],"num
 
 case "$mode" in
   denied) printf '%s' "$success_json" | sed 's/"permission_denials":\[\]/"permission_denials":[{"tool_name":"Write"}]/' ;;
+  deniedread) printf '%s' "$success_json" | sed 's/"permission_denials":\[\]/"permission_denials":[{"tool_name":"Read","tool_input":{"file_path":"src\/Big.php"}},{"tool_name":"Bash","tool_input":{"command":"cat -n src\/Big.php"}}]/' ;;
+  deniedwrite) printf '%s' "$success_json" | sed 's/"permission_denials":\[\]/"permission_denials":[{"tool_name":"Read","tool_input":{"file_path":"src\/Big.php"}},{"tool_name":"Bash","tool_input":{"command":"make deploy"}}]/' ;;
   *)      printf '%s' "$success_json" ;;
 esac
 exit 0

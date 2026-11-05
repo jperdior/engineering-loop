@@ -1867,6 +1867,15 @@ hit_usage_limit() {
 #
 # Returns 0 for a verified OK, 2 for a verified CONTINUE, 3 for a usage-limit pause, 4 for a clean
 # exit that wrote no sentinel while its record still stands (the caller resumes it once), 1 otherwise.
+# The denials in a session's JSON that refused more than a read: a Read, Grep or Glob, or a plain
+# Bash file reader (cat, head, tail, less, more, bat, nl, git show) with no pipe, redirect, chain or
+# substitution. Every other denial counts.
+DENIALS_BEYOND_READS='[(.permission_denials // [])[]
+  | select(((.tool_name == "Read") or (.tool_name == "Grep") or (.tool_name == "Glob")) | not)
+  | select(((.tool_name == "Bash")
+            and ((.tool_input.command // "") | test("^\\s*(cat|head|tail|less|more|bat|nl|git show)(\\s[^|;&<>`$()]*)?$"))) | not)
+  ] | length'
+
 verify_session() {
   local kind="$1" name="$2" json_file="$3"
   local status_file="$UNIT_DIR/status"
@@ -1879,12 +1888,19 @@ verify_session() {
   fi
 
   # Denials before the sentinel: a session denied `Write` cannot write the sentinel either, and
-  # "no sentinel" would hide the real cause.
+  # "no sentinel" would hide the real cause. With a sentinel, a denial still escalates when it
+  # refused something that acts -- a Write, an Edit, a deploy the spec forbids -- since a person
+  # must hear of the attempt even if the session went on to finish. A denied READ is no such
+  # attempt: a hook that keeps whole large files out of the context denies Read and `cat`, and the
+  # session reads another way. Those are logged, and the session is verified like any other.
   if [ -s "$json_file" ] \
      && [ "$(jq -r '(.permission_denials // []) | length' "$json_file" 2>/dev/null)" != "0" ]; then
-    escalate "$UNIT" "permission denials: $(jq -c '[.permission_denials[].tool_name] | unique' "$json_file" 2>/dev/null)"
-    [ ! -f "$status_file" ] || drop_record
-    return 1
+    if [ ! -f "$status_file" ] || [ "$(jq -r "$DENIALS_BEYOND_READS" "$json_file" 2>/dev/null)" != "0" ]; then
+      escalate "$UNIT" "permission denials: $(jq -c '[.permission_denials[].tool_name] | unique' "$json_file" 2>/dev/null)"
+      [ ! -f "$status_file" ] || drop_record
+      return 1
+    fi
+    log "$name: denied reads only, verifying the session as usual: $(jq -c '[.permission_denials[] | .tool_input.command // .tool_input.file_path // .tool_name]' "$json_file" 2>/dev/null)"
   fi
 
   # A clean exit with no sentinel is a session that ended its turn early -- it asked a question, or
